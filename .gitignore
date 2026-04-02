@@ -1,7 +1,6 @@
 .venv/
 tmp_data/
 ollama_data/
-models/
 .idea/
 __pycache__/
 .env
