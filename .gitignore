@@ -1,6 +1,8 @@
 .venv/
-tmp_data/
-ollama_data/
+tmp_data/*
+ollama_data/*
+models/stt/*
+
 .idea/
 __pycache__/
 .env
