@@ -1,0 +1,9 @@
+aio-pika
+SQLAlchemy
+asyncpg
+pydantic
+boto3
+pika
+torch
+openai-whisper
+faster-whisper

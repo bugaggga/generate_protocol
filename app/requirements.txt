@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+pydantic
+pika
+aio_pika
+boto3
+
+sqlalchemy[asyncio]
+asyncpg
+alembic

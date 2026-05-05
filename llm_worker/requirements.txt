@@ -1,0 +1,7 @@
+aio-pika
+SQLAlchemy
+asyncpg
+pydantic
+boto3
+pika
+requests
