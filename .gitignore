@@ -1,7 +1,7 @@
 .venv/
 tmp_data/
 ollama_data/
-models/
+/models/
 .idea/
 .env
 .env-worker

@@ -13,10 +13,11 @@ from common.models.dto import (
     ProcessingParamsDTO,
     OperationCreateResponseDTO, ProcessingStatus, AudioMetadata, StatusResponseDTO, CancelResponse
 )
+from common.services.manage_files import clean_operation_catalog
 from common.services.queue import enqueue_task
 from common.services.s3_client import create_presigned_post, s3, BUCKET
 
-QUEUE_NAME="stt_tasks"
+QUEUE_NAME="recognize_tasks"
 SERVICE_NAME="[API]"
 
 router = APIRouter(prefix="/api")
@@ -83,7 +84,7 @@ async def upload_audio(operation_id: UUID,
         update(Operation)
         .where(Operation.id == params.operation_id)
         .values(
-            params=params.form,
+            params=params.form.model_dump(),
             status=ProcessingStatus.processing,
             active_version=new_version,
             prev_versions=prev,
@@ -183,6 +184,8 @@ async def delete_operation(
         Bucket=BUCKET,
         Key=s3_key,
     )
+
+    clean_operation_catalog(str(operation_id))
 
     await update_status(db, str(operation_id), ProcessingStatus.closed)
     await db.commit()

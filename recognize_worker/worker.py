@@ -2,24 +2,24 @@ import json
 import logging
 import os
 
-from common.core.db_service import safe_update_status, get_status, is_cancelled, is_version_active, \
+from common.core.db_service import safe_update_status, get_status, is_version_active, \
     maybe_mark_cancelled
 from common.models.dto import ProcessingStatus
 from common.services.queue import async_consume, publish
-from stt_worker.stt.stt_service import STTService
+from recognize_worker.stt.recognize_service import RecognizeService
 import asyncio
 import aio_pika
 from common.services.s3_client import is_object_exists
 
 MAX_RETRIES = 3
 RETRY_DELAY = 3  # сек
-STT_QUEUE="stt_tasks"
+RECOGNIZE_QUEUE="recognize_tasks"
 TO_LLM_QUEUE="llm_tasks"
-SERVICE_NAME="[STT Worker]"
+SERVICE_NAME="[Recognize Worker]"
 
 logging.basicConfig(level=logging.INFO)
 
-stt_service = STTService(model_path="models/stt")
+recognize_service = RecognizeService(model_path="models/stt")
 
 async def process_stt(message: aio_pika.IncomingMessage):
     body = json.loads(message.body)
@@ -90,8 +90,9 @@ async def process_pipeline(operation_id: str, s3_key: str):
 
     # STT
     result = await asyncio.to_thread(
-        stt_service.transcribe,
-        s3_key
+        recognize_service.recognize,
+        s3_key,
+        operation_id
     )
 
     txt_file = save_to_txt(result, operation_id)
@@ -119,7 +120,7 @@ def save_to_txt(text: str, operation_id: str) -> str:
 async def main():
     logging.info(f"{SERVICE_NAME} Starting...")
 
-    await async_consume(process_stt,STT_QUEUE,1)
+    await async_consume(process_stt,RECOGNIZE_QUEUE,1)
 
 
 if __name__ == "__main__":

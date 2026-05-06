@@ -1,7 +1,7 @@
 import requests
 import logging
 
-from common.core.db_service import is_cancelled, is_version_active
+from common.core.db_service import is_version_active
 from llm_worker.llm.convert_protocol_data import json_to_markdown
 from llm_worker.llm.prepare_text import chunk_text, hierarchical_merge
 
@@ -80,7 +80,7 @@ def build_prompt(form: dict, transcript: str) -> str:
     4. Перед выводом сверь каждый ключ с исходной формой.
     
     5. Массив "blocks" должен содержать все блоки из формы в порядке их следования.
-    6. Поле "content" должно строго соответствовать указанному типу. Не добавляй лишние ключи, в том числе вложенные внутрь content. Например: Блок, содержащий обычный текст, должен располагаться прямо по ключу content, не выделяй его в отдельный ключ.
+    6. Поле "content" должно строго соответствовать указанному для блока виду. Не добавляй лишние ключи, в том числе вложенные внутрь content. Например: Блок, содержащий обычный текст, должен располагаться прямо по ключу content, не выделяй его в отдельный ключ.
     7. Если информация для блока отсутствует в транскрипции, используй пустые значения: "" (строка), [] (массив) или {{}} (объект). Не выдумывай данные.
     8. Сохраняй исходную нумерацию и формулировки title из формы.
 
@@ -106,9 +106,9 @@ def create_form_for_prompt(form: dict):
             fields = ", ".join(f["key"] for f in block["fields"])
             block_structure = f'Объект с ключами: {fields}\n'
         else:
-            block_structure = f'Обычная строка.\n'
+            block_structure = f'Строка.\n'
 
-        blocks_prompt += f"Структура: {block_structure}\n"
+        blocks_prompt += f"Вид: {block_structure}\n"
 
     return blocks_prompt
 

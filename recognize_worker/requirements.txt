@@ -7,3 +7,4 @@ pika
 torch
 openai-whisper
 faster-whisper
+requests
