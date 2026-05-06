@@ -89,7 +89,7 @@ function DeleteButton({ onDelete, deleting }) {
  
 // ── Main component ────────────────────────────────────────────────────────────
  
-export function OperationsList({ onAddFile }) {
+export function OperationsList() {
   const {
     apiBase,
     operations,

@@ -4,6 +4,8 @@ import { DEFAULT_BLOCKS, UPLOAD_PHASES } from "../constants";
 import { getOperationResult, getProtocolMarkdown } from "../api/operations";
 import { markdownToHtml } from "../utils"
 
+import { loadState, saveState } from "../persistState";
+
 // eslint-disable-next-line react-refresh/only-export-components
 export const AppContext = createContext(null);
 
@@ -17,11 +19,23 @@ export function useAppContext() {
 export function AppProvider({ children }) {
   const [apiBase, setApiBase] = useState("http://127.0.0.1:80");
 
-  const [operations, setOperations]           = useState([]);
-  const [activeOperationId, setActiveOperationId] = useState(null);
-  const [operationForms, setOperationForms]   = useState({});
-  const [operationUploads, setOperationUploads] = useState({});
-  const [operationProtocols, setOperationProtocols] = useState({});
+  // ── Восстанавливаем состояние из localStorage при первом рендере ──────────
+  const _persisted = loadState();
+
+  const [operations, setOperations]               = useState(_persisted?.operations          ?? []);
+  const [activeOperationId, setActiveOperationId] = useState(_persisted?.activeOperationId   ?? null);
+  const [operationForms, setOperationForms]       = useState(_persisted?.operationForms      ?? {});
+  const [operationUploads, setOperationUploads]   = useState(_persisted?.operationUploads    ?? {});
+  const [operationProtocols, setOperationProtocols] = useState(_persisted?.operationProtocols ?? {});
+
+  // ── Сохраняем состояние в localStorage с дебаунсом 600мс ─────────────────
+  // Дебаунс нужен чтобы не писать в storage на каждый тик прогресс-бара.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      saveState({ operations, activeOperationId, operationForms, operationUploads, operationProtocols });
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [operations, activeOperationId, operationForms, operationUploads, operationProtocols]);
 
   // ── Polling ───────────────────────────────────────────────────────────────
   // Polling живёт здесь, а не в компоненте/хуке.
@@ -34,6 +48,18 @@ export function AppProvider({ children }) {
   const pollingStarted = useRef(new Set()); // guard — не стартовать дважды
   const apiBaseRef     = useRef(apiBase);
   useEffect(() => { apiBaseRef.current = apiBase; }, [apiBase]);
+
+  // При первом рендере заполняем guard для операций, у которых протокол уже
+  // завершён (restored из localStorage). Без этого polling-эффект перезапишет
+  // status:"completed" → "polling" и протокол пропадёт с экрана.
+  useEffect(() => {
+    Object.entries(operationProtocols).forEach(([opId, protocol]) => {
+      if (protocol.status === "completed" || protocol.status === "error") {
+        pollingStarted.current.add(opId);
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // только на mount — operationProtocols намеренно не в deps
  
   // Чистим все таймеры при размонтировании провайдера
   useEffect(() => {
@@ -195,16 +221,16 @@ export function AppProvider({ children }) {
   }, []);
 
   /**
- * Удаляет операцию из всех словарей контекста.
- * Вызывается после успешного DELETE-запроса на сервер.
- */
-const removeOperation = useCallback((operationId) => {
-  // Останавливаем polling если он идёт
-  if (pollingTimers.current[operationId]) {
-    clearInterval(pollingTimers.current[operationId]);
-    delete pollingTimers.current[operationId];
-  }
-  pollingStarted.current.delete(operationId);
+  * Удаляет операцию из всех словарей контекста.
+  * Вызывается после успешного DELETE-запроса на сервер.
+  */
+  const removeOperation = useCallback((operationId) => {
+    // Останавливаем polling если он идёт
+    if (pollingTimers.current[operationId]) {
+      clearInterval(pollingTimers.current[operationId]);
+      delete pollingTimers.current[operationId];
+    }
+    pollingStarted.current.delete(operationId);
  
   // Убираем из всех словарей состояния
   setOperations(prev => prev.filter(op => op.id !== operationId));

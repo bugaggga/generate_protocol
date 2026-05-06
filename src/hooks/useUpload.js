@@ -50,7 +50,8 @@ export function useUpload(apiBase, formJson, operationId, activeUploadState) {
       (p) => setProgress(p)
     );
       log("Файл загружен. Запускаем обработку...", "success");
- 
+
+      updateOperationUpload(operationId, { s3Uploaded: true });
       setPhase(UPLOAD_PHASES.PROCESSING);
       await triggerProcessing(apiBase, op.id, formJsonRef.current, op.s3_key);
  

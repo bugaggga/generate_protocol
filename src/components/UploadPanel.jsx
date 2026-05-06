@@ -53,6 +53,9 @@ export function UploadPanel( {operationId} ) {
   // Если нет активной операции, ничего не рендерим
   if (!operationId) return null;
 
+  // После перезагрузки File-объект не восстанавливается — файл нельзя перезагрузить
+  const fileAvailable = Boolean(activeOperation?.file);
+
   const btnDisabled = isBusy || phase === UPLOAD_PHASES.DONE;
   const btnBg =
       phase === UPLOAD_PHASES.DONE  ? "#10B981" :
@@ -72,15 +75,21 @@ export function UploadPanel( {operationId} ) {
   const handleClick = () => {
     if (phase === UPLOAD_PHASES.ERROR) { /* retry */ return; }
     if (!activeOperation || isBusy || phase === UPLOAD_PHASES.DONE) return;
-    execute(activeOperation);
+
+    // Файл уже лежит в S3 (загружен ранее, потом отменили обработку) —
+    // не грузим повторно, сразу запускаем обработку через reprocess.
+    if (activeUploadState?.s3Uploaded) {
+      reprocess(activeOperation);
+    } else {
+      execute(activeOperation);
+    }
   };
 
   // ── Кнопка «Отменить» ────────────────────────────────────────────────────
   // Активна только пока идёт обработка на сервере (phase === DONE означает
   // что запрос ушёл и сервер работает) или во время PROCESSING.
-  const cancelBtnActive =
-    phase === UPLOAD_PHASES.DONE ||
-    phase === UPLOAD_PHASES.PROCESSING;
+  const protocolCompleted = activeProtocolState?.status === "completed";
+  const cancelBtnActive = !protocolCompleted && (phase === UPLOAD_PHASES.DONE || phase === UPLOAD_PHASES.PROCESSING);
   const cancelBtnDisabled = !cancelBtnActive || phase === UPLOAD_PHASES.CANCELLING;
  
   const handleCancel = () => {
@@ -112,6 +121,17 @@ export function UploadPanel( {operationId} ) {
       {/* ── Progress ── */}
       {phase === UPLOAD_PHASES.UPLOADING && <ProgressBar value={progress} />}
 
+      {/* ── Файл недоступен после перезагрузки ── */}
+      {!fileAvailable && phase === UPLOAD_PHASES.IDLE && (
+        <div style={{
+          fontSize: 11, color: "#92400E", padding: "8px 10px",
+          background: "#FFFBEB", borderRadius: 8,
+          border: "1px solid #FCD34D", lineHeight: 1.5,
+        }}>
+          Загрузите файл заново.
+        </div>
+      )}
+
       {/* ── Action Button ── */}
       <button
         onClick={handleClick} 
@@ -127,7 +147,7 @@ export function UploadPanel( {operationId} ) {
       </button>
 
       {/* Cancel button — показываем только когда есть смысл */}
-        {(phase === UPLOAD_PHASES.PROCESSING ||
+        {!protocolCompleted && (phase === UPLOAD_PHASES.PROCESSING ||
           phase === UPLOAD_PHASES.DONE       ||
           phase === UPLOAD_PHASES.CANCELLING) && (
           <button
