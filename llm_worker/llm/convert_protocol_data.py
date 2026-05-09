@@ -1,5 +1,43 @@
 import json
 
+import re
+
+def _extract_json(text: str) -> str:
+    """
+    Извлекает JSON из ответа модели, обрабатывая типичные случаи:
+    - markdown-обёртки ```json ... ```
+    - JSON зарытый в середине текста
+    - лишние пробелы и переносы строк
+    """
+    if not text or not text.strip():
+        raise ValueError("Model returned empty response")
+
+    text = text.strip()
+
+    # Убираем markdown-обёртки
+    text = re.sub(r'^```(?:json)?\s*', '', text)
+    text = re.sub(r'\s*```$', '', text)
+    text = text.strip()
+
+    # Пробуем распарсить напрямую
+    try:
+        json.loads(text)
+        return text
+    except json.JSONDecodeError:
+        pass
+
+    # Ищем первый JSON-объект в тексте
+    match = re.search(r'\{[\s\S]*\}', text)
+    if match:
+        candidate = match.group(0)
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError(f"No valid JSON found in model response: {text[:200]!r}")
+
 
 def json_to_markdown(response_json: str | dict) -> str:
     """
@@ -11,25 +49,14 @@ def json_to_markdown(response_json: str | dict) -> str:
     Returns:
         Отформатированная Markdown строка
     """
+    data = {}
     # Парсим JSON, если передана строка
     if isinstance(response_json, str):
-        # Очищаем от markdown-обёрток, если они есть
-        response_json = response_json.strip()
-        if response_json.startswith("```json"):
-            response_json = response_json[7:]
-        if response_json.startswith("```"):
-            response_json = response_json[3:]
-        if response_json.endswith("```"):
-            response_json = response_json[:-3]
+        data = json.loads(response_json)
 
-        data = json.loads(response_json.strip())
-    else:
-        data = response_json
-
-    markdown_parts = []
+    markdown_parts = ["# Протокол встречи\n"]
 
     # Заголовок документа
-    markdown_parts.append("# Протокол встречи\n")
 
     # Обрабатываем каждый блок
     for block in data.get("blocks", []):
@@ -157,58 +184,3 @@ def _escape_pipe(text: str) -> str:
         return ""
     return str(text).replace("|", "\\|")
 
-
-
-
-
-
-'''def save_markdown_to_file(markdown_text: str, path: str) -> None:
-    """Сохраняет Markdown текст в файл."""
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(markdown_text)
-
-
-# Пример использования
-if __name__ == "__main__":
-    # Пример ответа модели
-    example_response = {
-        "blocks": [
-            {
-                "id": "participants",
-                "title": "Участники встречи",
-                "content": {
-                    "Модератор": "Иванов Иван",
-                    "Участники": ["Петров Петр", "Сидорова Анна"]
-                }
-            },
-            {
-                "id": "agenda",
-                "title": "Повестка дня",
-                "content": [
-                    "Открытие встречи",
-                    "Обсуждение бюджета",
-                    "Планирование следующего квартала"
-                ]
-            },
-            {
-                "id": "decisions",
-                "title": "Принятые решения",
-                "content": [
-                    {"Решение": "Утвердить бюджет", "Ответственный": "Иванов", "Крайний срок": "2024-05-01"},
-                    {"Решение": "Подготовить отчёт", "Ответственный": "Петров", "Крайний срок": "2024-04-25"}
-                ]
-            },
-            {
-                "id": "summary",
-                "title": "Итоги встречи",
-                "content": "Встреча прошла продуктивно, все вопросы обсуждены."
-            }
-        ]
-    }
-
-    # Преобразуем в Markdown
-    markdown = json_to_markdown(example_response)
-    print(markdown)
-
-    # Сохраняем в файл
-    save_markdown_to_file(markdown, "C:/Generate_protocol/tmp_data/test_protocol.md")'''

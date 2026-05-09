@@ -4,14 +4,17 @@ import base64
 import logging
 from pathlib import Path
 
-import requests
-
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434")
 VISION_MODEL = os.getenv("VISION_MODEL", "moondream:1.8b")
-FRAME_INTERVAL = int(os.getenv("FRAME_INTERVAL_SEC", "30"))  # секунд между кадрами
+FRAME_INTERVAL = int(os.getenv("FRAME_INTERVAL_SEC", "15"))  # секунд между кадрами
 MAX_FRAMES = int(os.getenv("MAX_FRAMES", "20"))              # лимит кадров
 SERVICE_NAME = "[VideoService]"
 
+def _require_file(path: str) -> None:
+    if not os.path.exists(path):
+        raise Exception(
+            f"Operation file was removed during processing: {path}"
+        )
 
 def is_video_file(file_path: str) -> bool:
     """Проверяет наличие видеодорожки в файле через ffprobe."""
@@ -105,110 +108,57 @@ def get_video_duration(file_path: str) -> float:
                     f"will extract frames without interval adaptation")
     return 0.0
 
-def extract_frames(video_path: str, output_dir: str) -> list[str]:
+def extract_frames(video_path: str, output_dir: str) -> list[tuple[str, float]]:
     """
-    Извлекает ключевые кадры из видео с адаптивным интервалом.
-    Количество кадров ограничено MAX_FRAMES.
-    """
+        Извлекает ключевые кадры из видео.
+        Возвращает список пар (путь_к_файлу, временна́я_метка_в_секундах).
+        Кадры сохраняются в output_dir и НЕ удаляются — они нужны llm_worker.
+        """
+    _require_file(video_path)
     os.makedirs(output_dir, exist_ok=True)
 
     duration = get_video_duration(video_path)
-
     if duration > 0:
-        # Адаптируем интервал так, чтобы не превысить MAX_FRAMES
         interval = max(FRAME_INTERVAL, int(duration / MAX_FRAMES))
-        logging.info(
-            f"{SERVICE_NAME} Duration={duration:.0f}s, interval={interval}s, "
-            f"expected_frames≈{int(duration / interval)}"
-        )
+        logging.info(f"{SERVICE_NAME} Duration={duration:.0f}s, interval={interval}s, "
+                     f"expected≈{int(duration / interval)} frames")
     else:
-        # Длительность неизвестна — используем FRAME_INTERVAL как есть,
-        # лишние кадры срежем после извлечения
         interval = FRAME_INTERVAL
-        logging.info(
-            f"{SERVICE_NAME} Duration unknown, extracting with interval={interval}s"
-        )
+        logging.info(f"{SERVICE_NAME} Duration unknown, interval={interval}s")
 
     output_pattern = os.path.join(output_dir, "frame_%04d.jpg")
     result = subprocess.run(
-        [
-            "ffmpeg", "-y", "-i", video_path,
-            "-vf", f"fps=1/{interval},scale=1280:-2",
-            "-q:v", "3",
-            output_pattern,
-        ],
-        capture_output=True,
-        text=True,
+        ["ffmpeg", "-y", "-i", video_path,
+         "-vf", f"fps=1/{interval},scale=1280:-2", "-q:v", "3", output_pattern],
+        capture_output=True, text=True,
     )
-
     if result.returncode != 0:
-        logging.warning(
-            f"{SERVICE_NAME} ffmpeg frame extraction returned code {result.returncode}:\n"
-            f"{result.stderr[-500:] if result.stderr else ''}"
-        )
+        logging.warning(f"{SERVICE_NAME} ffmpeg extraction rc={result.returncode}: "
+                        f"{result.stderr[-300:] if result.stderr else ''}")
 
-    frames = sorted(
-        os.path.join(output_dir, f)
-        for f in os.listdir(output_dir)
-        if f.endswith(".jpg")
-    )
-    logging.info(f"{SERVICE_NAME} Extracted {len(frames)} frames")
-    return frames[:MAX_FRAMES]
+    frame_files = sorted(f for f in os.listdir(output_dir) if f.endswith(".jpg"))
+
+    # Вычисляем временну́ю метку для каждого кадра:
+    # frame_0001.jpg → t=0, frame_0002.jpg → t=interval, ...
+    frames_with_ts = [
+        (os.path.join(output_dir, fname), i * interval)
+        for i, fname in enumerate(frame_files)
+    ]
+
+    limited = frames_with_ts[:MAX_FRAMES]
+    logging.info(f"{SERVICE_NAME} Extracted {len(limited)} frames with timestamps "
+                 f"[0 .. {limited[-1][1] if limited else 0}s]")
+    return limited
 
 
-def _frame_to_base64(frame_path: str) -> str:
-    with open(frame_path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
-
-
-def analyze_frames(frames: list[str]) -> str:
-    """
-    Отправляет кадры во vision-модель Ollama и получает описание визуального контента встречи.
-    Кадры группируются пакетами, чтобы не превышать лимит контекста модели.
-    """
-    if not frames:
-        return ""
-
-    logging.info(
-        f"{SERVICE_NAME} Analyzing {len(frames)} frames "
-        f"via '{VISION_MODEL}' at {OLLAMA_URL}"
-    )
-
-    BATCH_SIZE = 5  # кадров за один запрос к vision-модели
-    all_descriptions: list[str] = []
-
-    for batch_start in range(0, len(frames), BATCH_SIZE):
-        batch = frames[batch_start: batch_start + BATCH_SIZE]
-        images_b64 = [_frame_to_base64(f) for f in batch]
-
-        frame_numbers = list(range(batch_start + 1, batch_start + len(batch) + 1))
-        prompt = (
-            f"Ты анализируешь кадры {frame_numbers[0]}–{frame_numbers[-1]} с записи рабочей встречи.\n"
-            "Опиши что показано на экране"
-        )
-
-        try:
-            response = requests.post(
-                f"{OLLAMA_URL}/api/generate",
-                json={
-                    "model": VISION_MODEL,
-                    "prompt": prompt,
-                    "images": images_b64,
-                    "stream": False,
-                },
-                timeout=300,
-            )
-            response.raise_for_status()
-            description = response.json().get("response", "").strip()
-            if description:
-                all_descriptions.append(description)
-        except Exception as exc:
-            logging.warning(
-                f"{SERVICE_NAME} Frame batch {batch_start}–{batch_start + len(batch)} "
-                f"analysis failed: {exc}"
-            )
-
-    return "\n\n".join(all_descriptions)
+def _encode_frame_b64(path: str) -> str | None:
+    """Читает .jpg и возвращает base64-строку. None при ошибке чтения."""
+    try:
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+    except OSError as e:
+        logging.warning(f"{SERVICE_NAME} Cannot read frame {path}: {e}")
+        return None
 
 
 def cleanup_frames(frames: list[str]):

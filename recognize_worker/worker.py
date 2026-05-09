@@ -51,7 +51,7 @@ async def process_stt(message: aio_pika.IncomingMessage):
     await message.ack()
 
     try:
-        txt_file = await process_with_retry(operation_id, s3_key)
+        txt_file, frames_meta = await process_with_retry(operation_id, s3_key)
 
         # Чекпоинт 2: после транскрипции (может занять минуты)
         if not await is_version_active(operation_id, version):
@@ -60,7 +60,7 @@ async def process_stt(message: aio_pika.IncomingMessage):
             return
 
         # отправка в LLM очередь
-        await publish_llm_task(operation_id, txt_file, version)
+        await publish_llm_task(operation_id, txt_file, frames_meta, version)
 
         await safe_update_status(operation_id, ProcessingStatus.partially_completed)
 
@@ -68,14 +68,14 @@ async def process_stt(message: aio_pika.IncomingMessage):
         logging.exception(f"{SERVICE_NAME} Failed")
         await safe_update_status(operation_id, ProcessingStatus.failed)
 
-async def process_with_retry(operation_id: str, s3_key: str) -> str:
+async def process_with_retry(operation_id: str, s3_key: str) -> tuple[str, list[dict] | None]:
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             logging.info(f"{SERVICE_NAME} Attempt {attempt}/{MAX_RETRIES}")
 
-            file_path = await process_pipeline(operation_id, s3_key)
+            file_path, frames_meta = await process_pipeline(operation_id, s3_key)
 
-            return  file_path # успех
+            return  file_path, frames_meta # успех
 
         except Exception:
             logging.exception(f"{SERVICE_NAME} Attempt {attempt} failed")
@@ -85,24 +85,25 @@ async def process_with_retry(operation_id: str, s3_key: str) -> str:
 
             await asyncio.sleep(RETRY_DELAY)
 
-async def process_pipeline(operation_id: str, s3_key: str):
+async def process_pipeline(operation_id: str, s3_key: str) -> tuple[str, list[dict] | None]:
     await safe_update_status(operation_id, ProcessingStatus.processing)
 
     # STT
-    result = await asyncio.to_thread(
+    transcript, frames_meta = await asyncio.to_thread(
         recognize_service.recognize,
         s3_key,
         operation_id
     )
 
-    txt_file = save_to_txt(result, operation_id)
+    txt_file = save_to_txt(transcript, operation_id)
 
-    return txt_file
+    return txt_file, frames_meta
 
-async def publish_llm_task(operation_id: str, transcript_path: str, version: int):
+async def publish_llm_task(operation_id: str, transcript_path: str, frames_meta: list[dict] | None, version: int):
     await publish(TO_LLM_QUEUE, {
         "operation_id": operation_id,
         "transcript_path": transcript_path,
+        "frames_meta": frames_meta,
         "version": version,
     })
 

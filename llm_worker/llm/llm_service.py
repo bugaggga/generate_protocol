@@ -1,12 +1,14 @@
 import requests
 import logging
+import os
 
 from common.core.db_service import is_version_active
-from llm_worker.llm.convert_protocol_data import json_to_markdown
-from llm_worker.llm.prepare_text import chunk_text, hierarchical_merge
+from llm_worker.llm.convert_protocol_data import json_to_markdown, _extract_json
+from llm_worker.llm.prepare_text import chunk_text, hierarchical_merge, chunk_by_chars
 
-OLLAMA_URL = "http://host.docker.internal:11434/api/generate"
-MODEL = "qwen2.5:3b"
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+OLLAMA_ENDPOINT = f"{OLLAMA_HOST}/api/generate"
+MODEL = "qwen2.5vl:3b"
 SERVICE_NAME="[Build]"
 RESPONSE_STRUCT = """
 {
@@ -21,20 +23,41 @@ RESPONSE_STRUCT = """
 }
 """
 
-def call_llm(prompt: str):
-    response = requests.post(
-        OLLAMA_URL,
-        json={
-            "model": MODEL,
-            "prompt": prompt,
-            "stream": False
-        },
-        timeout=1200
-    )
+def call_llm(prompt: str, images: list[str] | None = None):
+    """
+        Вызывает Ollama.
+        images — список base64-строк (jpg). При None модель работает
+        как обычная текстовая LLM, без изменения API.
+        """
+    payload: dict = {
+        "model": MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "num_ctx": 4096
+        }
+    }
+    if images:
+        payload["images"] = images
+
+    response = requests.post(OLLAMA_ENDPOINT, json=payload, timeout=1200)
 
     data = response.json()
+
+    if "error" in data:
+        logging.error(f"{SERVICE_NAME} error: {data['error']}")
+        raise RuntimeError(f"Ollama error: {data['error']}")
+
+    if "response" not in data:
+        logging.error(f"{SERVICE_NAME} Unexpected Ollama response: {data}")
+        raise RuntimeError(f"Ollama returned no 'response' field: {data}")
+
     return data["response"]
 
+
+# ---------------------------------------------------------------------------
+# Промпты
+# ---------------------------------------------------------------------------
 def merge_fn(summaries_group: list[str]) -> str:
     separator = "\n\n---\n\n"
     prompt = f"""
@@ -82,6 +105,7 @@ def build_prompt(form: dict, transcript: str) -> str:
     5. Массив "blocks" должен содержать все блоки из формы в порядке их следования.
     6. Поле "content" должно строго соответствовать указанному для блока виду. Не добавляй лишние ключи, в том числе вложенные внутрь content. Например: Блок, содержащий обычный текст, должен располагаться прямо по ключу content, не выделяй его в отдельный ключ.
     7. Если информация для блока отсутствует в транскрипции, используй пустые значения: "" (строка), [] (массив) или {{}} (объект). Не выдумывай данные.
+    8. Если к транскрипции приложены изображения — дополняй из них визуальную информацию (слайды, таблицы, схемы, текст), если есть данные для протокола.
     8. Сохраняй исходную нумерацию и формулировки title из формы.
 
 ФОРМА ПРОТОКОЛА:
@@ -115,14 +139,33 @@ def create_form_for_prompt(form: dict):
 class VersionOutdatedError(Exception):
     """Версия операции устарела — штатная остановка."""
 
-def build_protocol(transcript, form: dict, operation_id: str = None, version=None, loop=None):
-    import asyncio
-    chunks = chunk_text(transcript)
-    summaries = []
+def build_protocol(
+        transcript,
+        form: dict,
+        frames_meta: list[dict] | None = None,
+        operation_id: str = None,
+        version=None,
+        loop=None):
+    """
+        Строит протокол встречи.
 
-    for i, chunk in enumerate(chunks):
+        frames_meta — список {"path": str, "timestamp_sec": float}.
+        При наличии кадров использует временно́й чанкинг и передаёт
+        изображения в модель вместе с текстом.
+        При отсутствии — обычный символьный чанкинг (аудио-режим).
+        """
+    # Выбираем стратегию чанкинга
+    if frames_meta:
+        raw_chunks = chunk_by_chars(transcript, frames_meta)
+        # raw_chunks: list[(text, [frame_path, ...])]
+    else:
+        raw_chunks = [(chunk, []) for chunk in chunk_text(transcript)]
+
+    summaries = []
+    for i, (text_chunk, frame_dicts) in enumerate(raw_chunks):
         # Чекпоинт между каждым чанком
         if operation_id and version is not None and loop is not None:
+            import asyncio
             future = asyncio.run_coroutine_threadsafe(
                 is_version_active(operation_id, version),
                 loop
@@ -135,29 +178,34 @@ def build_protocol(transcript, form: dict, operation_id: str = None, version=Non
 
             if not still_active:
                 raise VersionOutdatedError(
-                    f"v{version} outdated at chunk {i}/{len(chunks)}"
+                    f"v{version} outdated at chunk {i}/{len(raw_chunks)}"
                 )
 
-        logging.info(f"{SERVICE_NAME} Processing chunk {i + 1}/{len(chunks)}")
-        prompt = build_prompt(form, chunk)
-        summary = build_with_retries(call_llm, prompt)
+        images_b64 = [frame_dict["b64"] for frame_dict in frame_dicts] if frame_dicts else None
+        frame_info = f" + {len(images_b64)} frames" if images_b64 else ""
+        logging.info(f"{SERVICE_NAME} Chunk {i + 1}/{len(raw_chunks)}{frame_info}")
+
+        prompt = build_prompt(form, text_chunk)
+        summary = build_with_retries(call_llm, prompt, images_b64)
+        logging.info(f"{SERVICE_NAME} Chunk {i + 1} Result:  {summary}")
         summaries.append(summary)
 
     logging.info(f"{SERVICE_NAME} Start merging parts")
-    merging_protocol = hierarchical_merge(summaries=summaries, merge_fn=merge_fn)
-    md_protocol = json_to_markdown(merging_protocol)
-    return merging_protocol, md_protocol
+    raw_protocol = hierarchical_merge(summaries=summaries, merge_fn=merge_fn)
+    clean_protocol = _extract_json(raw_protocol)  # единственная точка очистки
+    md_protocol = json_to_markdown(clean_protocol)
+    return clean_protocol, md_protocol
 
-def build_with_retries(callback, prompt: str):
-    for attempt in range(1, 4):
+def build_with_retries(
+        callback,
+        prompt: str,
+        images: list[str] | None = None,
+        max_attempts: int = 3,):
+    for attempt in range(1, max_attempts + 1):
         try:
-            logging.info(f"{SERVICE_NAME} Attempt {attempt}/{3}")
-
-            summary = callback(prompt)
-            return  summary # успех
-
+            logging.info(f"{SERVICE_NAME} LLM attempt {attempt}/{max_attempts}")
+            return callback(prompt, images)
         except Exception:
             logging.exception(f"{SERVICE_NAME} Attempt {attempt} failed")
-
-            if attempt == 3:
+            if attempt == max_attempts:
                 raise

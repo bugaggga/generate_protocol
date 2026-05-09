@@ -19,6 +19,7 @@ async def process_llm(message: aio_pika.IncomingMessage):
     body = json.loads(message.body)
     operation_id = body["operation_id"]
     transcript_path = body["transcript_path"]
+    frames_meta = body.get("frames_meta")
     version = body["version"]
 
     # Чекпоинт 1
@@ -43,6 +44,7 @@ async def process_llm(message: aio_pika.IncomingMessage):
             build_protocol,
             transcript,
             form,
+            frames_meta,
             str(operation_id),
             version,
             loop,
@@ -52,10 +54,8 @@ async def process_llm(message: aio_pika.IncomingMessage):
         logging.info(f"{SERVICE_NAME}: json_Protocol saved in {save_protocol(json_protocol, json_folder)}")
         logging.info(f"{SERVICE_NAME}: Protocol saved in {save_protocol(md_protocol, operation_id)}")
 
-        json_data = json.loads(json_protocol.strip())
-
         logging.info(f"{SERVICE_NAME}: Setting result...")
-        await set_result(json.loads(json_protocol.strip()), md_protocol, operation_id)
+        await set_result(json.loads(json_protocol), md_protocol, operation_id)
         await safe_update_status(operation_id, ProcessingStatus.completed)
 
     except asyncio.CancelledError:
@@ -69,6 +69,7 @@ async def process_llm(message: aio_pika.IncomingMessage):
 
         logging.exception(f"{SERVICE_NAME} Failed")
         await safe_update_status(operation_id, ProcessingStatus.failed)
+
 
 async def publish_llm_task(operation_id: str, transcript_path: str):
     await publish(LLM_QUEUE, {

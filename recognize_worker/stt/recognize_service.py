@@ -10,9 +10,7 @@ from common.services.s3_client import s3, BUCKET
 from recognize_worker.stt.video_service import (
     is_video_file,
     extract_audio,
-    extract_frames,
-    analyze_frames,
-    cleanup_frames,
+    extract_frames, _encode_frame_b64
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -49,27 +47,25 @@ class RecognizeService:
 
         return tmp_file.name
 
-    def recognize(self, s3_key: str, operation_id: str) -> str:
+    def recognize(self, s3_key: str, operation_id: str) -> tuple[str, list[dict] | None]:
         """
         Точка входа: скачивает файл из S3, определяет тип (аудио / видео)
         и возвращает обогащённый текстовый контекст для LLM.
         """
-        temp_file_path = self.download_file(s3_key, operation_id)
-        result = ""
+        tmp_file_path = self.download_file(s3_key, operation_id)
         try:
-            if is_video_file(temp_file_path):
+            if is_video_file(tmp_file_path):
                 logging.info(f"{SERVICE_NAME} Detected VIDEO file, running full pipeline")
-                result = self._transcribe_video(Path(temp_file_path))
+                return self._transcribe_video(Path(tmp_file_path))
             else:
                 logging.info(f"{SERVICE_NAME} Detected AUDIO file, running STT only")
-                result = self._transcribe_audio(temp_file_path)
+                return self._transcribe_audio(tmp_file_path), None
         finally:
             try:
-                os.remove(temp_file_path)
+                os.remove(tmp_file_path)
             except OSError:
                 pass
 
-        return result
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -83,15 +79,21 @@ class RecognizeService:
             file_path,
             beam_size=5,
             vad_filter=True,
-            word_timestamps=True,
+            word_timestamps=False,
             temperature=0.0,
         )
 
-        full_text = " ".join(s.text for s in segments)
-        logging.info(f"{SERVICE_NAME} STT done. Length={len(full_text)}")
-        return full_text
+        lines = []
+        for seg in segments:
+            start = _fmt_time(seg.start)
+            end = _fmt_time(seg.end)
+            lines.append(f"[{start}-{end}] {seg.text.strip()}")
 
-    def _transcribe_video(self, tmp_video_path: Path) -> str:
+        transcript = "\n".join(lines)
+        logging.info(f"{SERVICE_NAME} STT done. Segments={len(lines)}")
+        return transcript
+
+    def _transcribe_video(self, tmp_video_path: Path) -> tuple[str, list[dict]]:
         """
         Полный пайплайн для видеофайла:
             1. Извлечение аудио → Whisper
@@ -110,24 +112,31 @@ class RecognizeService:
             except OSError:
                 pass
 
-        # --- Шаг 2: ключевые кадры → визуальный контекст ---
+        # --- Шаг 2: кадры → метаданные ---
         frames_dir = f"{str(tmp_video_path.parent)}/frames"
-        frames: list[str] = []
-        visual_context = ""
-        try:
-            frames = extract_frames(str(tmp_video_path), frames_dir)
-            visual_context = analyze_frames(frames)
-        finally:
-            cleanup_frames(frames)
-            shutil.rmtree(frames_dir, ignore_errors=True)
+        frames_with_ts = extract_frames(str(tmp_video_path), frames_dir)
 
-        # --- Шаг 3: сборка итогового контекста ---
-        return _combine_context(transcript, visual_context)
+        frames_meta = []
+        for path, ts in frames_with_ts:
+            b64 = _encode_frame_b64(path)
+            if b64:
+                frames_meta.append({"b64": b64, "timestamp_sec": ts})
+
+        #shutil.rmtree(frames_dir, ignore_errors=True)
+
+        logging.info(f"{SERVICE_NAME} Video pipeline done: "
+                     f"{len(frames_meta)} frames encoded, transcript {len(transcript)} chars")
+        return transcript, frames_meta
 
 
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
+def _fmt_time(seconds: float) -> str:
+    """60.5 → '01:00'"""
+    m, s = divmod(int(seconds), 60)
+    return f"{m:02d}:{s:02d}"
 
 def _combine_context(transcript: str, visual_context: str) -> str:
     """
