@@ -88,7 +88,8 @@ export function UploadPanel( {operationId} ) {
   // ── Кнопка «Отменить» ────────────────────────────────────────────────────
   // Активна только пока идёт обработка на сервере (phase === DONE означает
   // что запрос ушёл и сервер работает) или во время PROCESSING.
-  const protocolCompleted = activeProtocolState?.status === "completed";
+  const protocolCompleted = activeProtocolState?.status === "completed" 
+  || activeProtocolState?.status === "error";
   const cancelBtnActive = !protocolCompleted && (phase === UPLOAD_PHASES.DONE || phase === UPLOAD_PHASES.PROCESSING);
   const cancelBtnDisabled = !cancelBtnActive || phase === UPLOAD_PHASES.CANCELLING;
  
@@ -179,7 +180,8 @@ export function UploadPanel( {operationId} ) {
       }
 
       {/* ── Reprocess Button — только когда протокол успешно получен ── */}
-      {activeProtocolState?.status === "completed" && (
+      {(activeProtocolState?.status === "completed" ||
+       activeProtocolState?.status === "error") && (
         <button
           onClick={() => reprocess(activeOperation)}
           disabled={isBusy}
