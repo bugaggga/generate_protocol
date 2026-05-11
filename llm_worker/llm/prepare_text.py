@@ -77,8 +77,8 @@ def _split_segments_by_chars(
 def chunk_by_chars(
         transcript: str,
         frames_meta: list[dict],
-        chunk_size: int = 3000,
-        overlap: int = 500,
+        chunk_size: int = 1000,
+        overlap: int = 200,
         max_frames_per_chunk: int = 5,
 ) -> list[tuple[str, list[dict]]]:
     """
@@ -138,7 +138,7 @@ def _fmt_ts(seconds: float) -> str:
 # Символьный чанкинг (fallback для аудио без кадров)
 # ---------------------------------------------------------------------------
 
-def chunk_text(transcript: str, chunk_size: int = 3000, overlap: int = 500) -> list[str]:
+def chunk_text(transcript: str, chunk_size: int = 3000, overlap: int = 250) -> list[str]:
     """
         Разбивает транскрипт на чанки по числу символов, не разрывая сегменты.
         Используется для аудио (без фреймов) — возвращает список строк.
@@ -178,8 +178,8 @@ def group_items(items: list[str], group_size: int) -> list[list[str]]:
 def hierarchical_merge(
     summaries: list[str],
     merge_fn,
-    group_size: int = 3,
-    max_iterations: int = 5,
+    group_size: int = 4,
+    max_iterations: int = 10,
 ) -> str:
     """
     Многоуровневое объединение summaries

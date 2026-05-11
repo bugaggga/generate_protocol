@@ -24,10 +24,7 @@ class ProcessingStatus(str, Enum):
 
 # API models
 
-class OperationCreateResponseDTO(BaseModel):
-    operation_id: UUID
-    s3_key: str
-    s3_presigned_url: dict
+# --------- Request ----------
 
 class ProcessingParamsDTO(BaseModel):
     operation_id: UUID
@@ -37,24 +34,12 @@ class ProcessingParamsDTO(BaseModel):
 class AudioMetadata(BaseModel):
     file_name : str
 
-class TranscriptSegmentDTO(BaseModel):
-    start: float
-    end: float
-    speaker: str
-    text: str
+# ---------- Response -----------
 
-
-class ProtocolDTO(BaseModel):
-    title: str
-    summary: str
-    decisions: List[str]
-    tasks: List[str]
-
-
-class ProcessingResultDTO(BaseModel):
-    transcript: List[TranscriptSegmentDTO]
-    protocol: ProtocolDTO
-
+class OperationCreateResponseDTO(BaseModel):
+    operation_id: UUID
+    s3_key: str
+    s3_presigned_url: dict
 
 class StatusResponseDTO(BaseModel):
     status: ProcessingStatus
@@ -63,7 +48,6 @@ class CancelResponse(BaseModel):
     operation_id: UUID
     status: str
     message: str
-
 
 # ---------------------------------------------------------------------------
 # Block sub-models

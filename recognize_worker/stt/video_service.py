@@ -6,8 +6,8 @@ from pathlib import Path
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434")
 VISION_MODEL = os.getenv("VISION_MODEL", "moondream:1.8b")
-FRAME_INTERVAL = int(os.getenv("FRAME_INTERVAL_SEC", "15"))  # секунд между кадрами
-MAX_FRAMES = int(os.getenv("MAX_FRAMES", "20"))              # лимит кадров
+FRAME_INTERVAL = int(os.getenv("FRAME_INTERVAL_SEC", "30"))  # секунд между кадрами
+MAX_FRAMES = int(os.getenv("MAX_FRAMES", "120"))              # лимит кадров
 SERVICE_NAME = "[VideoService]"
 
 def _require_file(path: str) -> None:

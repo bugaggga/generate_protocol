@@ -98,7 +98,6 @@ services:
     image: rabbitmq:3-management
     ports:
       - "5672:5672"
-      - "16000:15672"
     healthcheck:
       test: [ "CMD", "rabbitmq-diagnostics", "ping" ]
       interval: 5s

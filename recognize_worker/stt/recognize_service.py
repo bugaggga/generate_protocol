@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 from faster_whisper import WhisperModel
+import ctranslate2
 
 from common.services.s3_client import s3, BUCKET
 from recognize_worker.stt.video_service import (
@@ -22,10 +23,12 @@ class RecognizeService:
     def __init__(self, model_path: str):
         logging.info(f"{SERVICE_NAME} Loading STT model...")
 
+        device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+        compute_type = "float16" if device == "cuda" else "int8"
         self.model = WhisperModel(
             model_path,
-            device="cpu",
-            compute_type="int8"
+            device=device,
+            compute_type=compute_type
         )
 
         logging.info(f"{SERVICE_NAME} STT Model loaded")
@@ -50,7 +53,7 @@ class RecognizeService:
     def recognize(self, s3_key: str, operation_id: str) -> tuple[str, list[dict] | None]:
         """
         Точка входа: скачивает файл из S3, определяет тип (аудио / видео)
-        и возвращает обогащённый текстовый контекст для LLM.
+        возвращает контекст для LLM.
         """
         tmp_file_path = self.download_file(s3_key, operation_id)
         try:
@@ -137,29 +140,3 @@ def _fmt_time(seconds: float) -> str:
     """60.5 → '01:00'"""
     m, s = divmod(int(seconds), 60)
     return f"{m:02d}:{s:02d}"
-
-def _combine_context(transcript: str, visual_context: str) -> str:
-    """
-    Объединяет речевую транскрипцию и визуальный контекст в единый текст
-    для последующей обработки LLM-воркером.
-    """
-    parts: list[str] = []
-
-    if visual_context.strip():
-        parts.append(
-            "=== ВИЗУАЛЬНЫЙ КОНТЕКСТ ВСТРЕЧИ ===\n"
-            "(Описание слайдов, материалов и событий с видеозаписи)\n\n"
-            + visual_context.strip()
-        )
-
-    if transcript.strip():
-        parts.append(
-            "=== ТРАНСКРИПЦИЯ РЕЧИ ===\n"
-            + transcript.strip()
-        )
-
-    if not parts:
-        logging.warning("[STT] Both transcript and visual context are empty")
-        return ""
-
-    return "\n\n" + "\n\n".join(parts) + "\n"
