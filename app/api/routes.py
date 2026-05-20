@@ -15,7 +15,7 @@ from common.models.dto import (
 )
 from common.services.manage_files import clean_operation_catalog
 from common.services.queue import enqueue_task
-from common.services.s3_client import create_presigned_post, s3, BUCKET
+from common.services.s3_client import create_presigned_post, delete_object
 
 QUEUE_NAME="recognize_tasks"
 SERVICE_NAME="[API]"
@@ -180,11 +180,7 @@ async def delete_operation(
         operation_id: UUID,
         s3_key: str = Body(embed=True),
         db: AsyncSession = Depends(get_db)):
-    s3.delete_object(
-        Bucket=BUCKET,
-        Key=s3_key,
-    )
-
+    delete_object(s3_key)
     clean_operation_catalog(str(operation_id))
 
     await update_status(db, str(operation_id), ProcessingStatus.closed)

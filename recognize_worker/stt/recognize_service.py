@@ -7,7 +7,7 @@ from pathlib import Path
 from faster_whisper import WhisperModel
 import ctranslate2
 
-from common.services.s3_client import s3, BUCKET
+from common.services.s3_client import download_file
 from recognize_worker.stt.video_service import (
     is_video_file,
     extract_audio,
@@ -46,8 +46,7 @@ class RecognizeService:
             suffix=ext
         ))
 
-        s3.download_file(BUCKET, key, tmp_file.name)
-
+        download_file(key, tmp_file.name)
         return tmp_file.name
 
     def recognize(self, s3_key: str, operation_id: str) -> tuple[str, list[dict] | None]:
@@ -125,7 +124,7 @@ class RecognizeService:
             if b64:
                 frames_meta.append({"b64": b64, "timestamp_sec": ts})
 
-        #shutil.rmtree(frames_dir, ignore_errors=True)
+        shutil.rmtree(frames_dir, ignore_errors=True)
 
         logging.info(f"{SERVICE_NAME} Video pipeline done: "
                      f"{len(frames_meta)} frames encoded, transcript {len(transcript)} chars")

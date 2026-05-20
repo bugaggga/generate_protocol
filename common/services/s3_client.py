@@ -4,10 +4,11 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 import logging
 
-BUCKET = os.getenv("AWS_S3_BUCKET")
+AWS_BUCKET = os.getenv("AWS_S3_BUCKET")
+MINIO_BUCKET = os.getenv("MINIO_S3_BUCKET")
 SERVICE_NAME="[S3_Client]"
 
-s3 = boto3.client(
+_internal_client = boto3.client(
     "s3",
     endpoint_url=os.getenv("AWS_S3_ENDPOINT"),
     aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
@@ -19,25 +20,39 @@ s3 = boto3.client(
         )
 )
 
+# Внешний клиент — для генерации presigned URL, доступных из браузера
+_public_client = boto3.client(
+    "s3",
+    endpoint_url=os.getenv("S3_PUBLIC_URL", "http://localhost:9000"),
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", "minioadmin"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", "minioadmin"),
+    region_name=os.getenv("S3_REGION", "us-east-1"),
+    config=Config(signature_version="s3v4"),
+)
+
+def download_file(key: str, dest_path: str) -> None:
+    """Скачивает файл внутри Docker-сети."""
+    _internal_client.download_file(MINIO_BUCKET, key, dest_path)
+
+def delete_object(key: str):
+    _internal_client.delete_object(Bucket=MINIO_BUCKET, Key=key)
+
 def is_object_exists(key: str) -> bool:
     try:
-        s3.head_object(Bucket=BUCKET, Key=key)
+        _internal_client.head_object(Bucket=MINIO_BUCKET, Key=key)
         return True
-    except s3.exceptions.ClientError as e:
+    except _internal_client.exceptions.ClientError as e:
         if e.response["Error"]["Code"] == "404":
             return False
         raise  # другие ошибки (403, 500...) пробрасываем дальше
 
 def create_presigned_post(object_key, expiration=3600, fields=None):
-
-    # = [["content-length-range", 1, max_size]]
     logging.info(f"{SERVICE_NAME} Creating presigned URL...")
     try:
-        response = s3.generate_presigned_post(
-            BUCKET,
-            object_key,
+        response = _public_client.generate_presigned_post(
+            MINIO_BUCKET,
+            Key=object_key,
             Fields=fields,
-            #Conditions=conditions,
             ExpiresIn=expiration
         )
     except ClientError as e:

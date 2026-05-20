@@ -6,5 +6,5 @@ ollama_data/
 .env
 .env-worker
 *.pyc
-
+*.log
 *.bin

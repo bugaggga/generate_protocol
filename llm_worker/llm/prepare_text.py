@@ -106,11 +106,7 @@ def chunk_by_chars(
         t_start = seg_chunk[0][0]  # start первого сегмента
         t_end = seg_chunk[-1][1]  # end последнего сегмента
 
-        lines = [
-            #f"[{_fmt_ts(s)}-{_fmt_ts(e)}] {t}"
-            f"{t}"
-            for _, _, t in seg_chunk
-        ]
+        lines = [f"{t}" for _, _, t in seg_chunk]
         text_chunk = "\n".join(lines)
 
         chunk_frames = [

@@ -138,7 +138,7 @@ def extract_frames(video_path: str, output_dir: str) -> list[tuple[str, float]]:
 
     frame_files = sorted(f for f in os.listdir(output_dir) if f.endswith(".jpg"))
 
-    # Вычисляем временну́ю метку для каждого кадра:
+    # Временная метка для каждого кадра:
     # frame_0001.jpg → t=0, frame_0002.jpg → t=interval, ...
     frames_with_ts = [
         (os.path.join(output_dir, fname), i * interval)

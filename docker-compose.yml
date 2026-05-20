@@ -1,4 +1,5 @@
 services:
+  # Миграции БД
   migrations:
     build:
       context: .
@@ -17,6 +18,7 @@ services:
     depends_on:
       - postgres
 
+  # API-сервис
   api:
     build:
       context: .
@@ -29,11 +31,13 @@ services:
       - ./app:/app/app
       - ./common:/app/common
     depends_on:
-      - rabbitmq
-      - postgres
-      - migrations
+      minio:
+        condition: service_healthy
+      worker-recognize:
+        condition: service_healthy
 
-  worker-stt:
+  # Сервис распознавания аудиовизуальных данных
+  worker-recognize:
     build:
       context: .
       dockerfile: recognize_worker/Dockerfile
@@ -43,14 +47,13 @@ services:
       - ./recognize_worker:/worker/recognize_worker
       - ./common:/worker/common
       - ./tmp_data:/worker/tmp
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
        postgres:
          condition: service_healthy
        rabbitmq:
         condition: service_healthy
 
+  # Сервис генерации протокола
   worker-llm:
     build:
       context: .
@@ -61,14 +64,13 @@ services:
       - ./llm_worker:/worker/llm_worker
       - ./common:/worker/common
       - ./tmp_data:/worker/tmp
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
 
+  # Реляционная БД
   postgres:
     image: postgres:15
     environment:
@@ -94,6 +96,7 @@ services:
     depends_on:
       - postgres
 
+  # Брокер сообщений
   rabbitmq:
     image: rabbitmq:3-management
     ports:
@@ -103,3 +106,84 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  frontend:
+    build:
+      context: ./frontend        # папка с клонированным фронтендом
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ""    # пустая строка → nginx proxies /api/*
+    ports:
+      - "3000:80"
+    volumes:
+      - ./frontend:/app
+    depends_on:
+      - api
+
+  # Локальные LLM через Ollama
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: [ "CMD", "ollama", "list" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    runtime: nvidia
+    restart: unless-stopped
+
+  ollama-init:
+    image: ollama/ollama:latest
+    entrypoint: >
+      sh -c "
+        ollama pull qwen2.5:3b &&
+        ollama pull qwen2.5vl:3b &&
+        echo 'Models ready'
+      "
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
+  # S3-Хранилище
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web-консоль
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: [ "CMD", "mc", "ready", "local" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/generate-protocol &&
+        mc anonymous set none local/generate-protocol &&
+        echo 'Bucket ready'
+      "
+    restart: "no"
+
+volumes:
+  ollama_data:
+  minio_data:
