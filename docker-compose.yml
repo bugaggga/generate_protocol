@@ -47,6 +47,7 @@ services:
       - ./recognize_worker:/worker/recognize_worker
       - ./common:/worker/common
       - ./tmp_data:/worker/tmp
+    runtime: nvidia
     depends_on:
        postgres:
          condition: service_healthy
