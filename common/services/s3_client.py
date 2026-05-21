@@ -51,7 +51,7 @@ def is_object_exists(key: str) -> bool:
 def create_presigned_post(object_key, expiration=3600, fields=None):
     logging.info(f"{SERVICE_NAME} Creating presigned URL...")
     try:
-        response = _public_client.generate_presigned_post(
+        response = _internal_client.generate_presigned_post(
             MINIO_BUCKET,
             Key=object_key,
             Fields=fields,
