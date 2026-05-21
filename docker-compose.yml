@@ -34,7 +34,7 @@ services:
       minio:
         condition: service_healthy
       worker-recognize:
-        condition: service_healthy
+        condition: service_started
 
   # Сервис распознавания аудиовизуальных данных
   worker-recognize:
