@@ -6,7 +6,6 @@ Create Date: 2026-03-24 14:43:59.231074
 
 """
 from typing import Sequence, Union
-import os
 
 from alembic import op
 import sqlalchemy as sa
@@ -51,7 +50,7 @@ def upgrade() -> None:
         operations,
         [
             {
-                "id": uuid.UUID(os.getenv("TEST_OPERATION_ID")),
+                "id": uuid.UUID("736d3b0d-c553-4936-876c-24a751b758de"),
                 "status": "created",
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),

@@ -24,9 +24,15 @@ class RecognizeService:
         logging.info(f"{SERVICE_NAME} Loading STT model...")
 
         device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
-        compute_type = "float16" if device == "cuda" else "int8"
+        if device == "cuda":
+            compute_type = "float16"
+            model_name = "large"
+        else:
+            compute_type = "int8"
+            model_name = "medium"
+
         self.model = WhisperModel(
-            model_path,
+            model_name,
             device=device,
             compute_type=compute_type
         )

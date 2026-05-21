@@ -1,8 +1,11 @@
 from pathlib import Path
 import logging
+import os
+
+TMP_DIR = os.getenv("TMP_DIR", "/worker/tmp")
 
 def save_protocol(text: str, operation_id: str) -> str:
-    path = Path(f"/worker/tmp/{operation_id}/protocol.txt")
+    path = Path(f"{TMP_DIR}/{operation_id}/protocol.txt")
 
     # Создаём директорию, если её нет (parents=True создаёт все родительские директории)
     path.parent.mkdir(parents=True, exist_ok=True)

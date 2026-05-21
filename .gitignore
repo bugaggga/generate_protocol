@@ -3,8 +3,6 @@ tmp_data/
 ollama_data/
 /models/
 .idea/
-.env
-.env-worker
 *.pyc
 *.log
 *.bin

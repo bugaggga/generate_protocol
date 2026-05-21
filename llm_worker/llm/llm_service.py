@@ -6,8 +6,8 @@ from common.core.db_service import is_version_active
 from llm_worker.llm.convert_protocol_data import json_to_markdown, _extract_json
 from llm_worker.llm.prepare_text import chunk_text, hierarchical_merge, chunk_by_chars
 
-#OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
-OLLAMA_ENDPOINT = f"http://51.250.98.26:11434/api/generate"
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+OLLAMA_ENDPOINT = f"{OLLAMA_HOST}/api/generate"
 MODEL_TEXT = os.getenv("OLLAMA_MODEL_TEXT",   "qwen2.5:3b")
 MODEL_VISION = os.getenv("OLLAMA_MODEL_VISION",  "qwen2.5vl:3b")
 SERVICE_NAME="[Build]"

@@ -10,14 +10,16 @@ SERVICE_NAME="[S3_Client]"
 
 _internal_client = boto3.client(
     "s3",
-    endpoint_url=os.getenv("AWS_S3_ENDPOINT"),
+    endpoint_url=os.getenv("S3_ENDPOINT_URL", "http://minio:9000"),
     aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
     aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    region_name=os.getenv("S3_REGION", "us-east-1"),
     config=Config(
-            retries={"max_attempts": 3},
-            connect_timeout=5,
-            read_timeout=120,
-        )
+        signature_version="s3v4",
+        retries={"max_attempts": 3},
+        connect_timeout=5,
+        read_timeout=120,
+    )
 )
 
 # Внешний клиент — для генерации presigned URL, доступных из браузера
