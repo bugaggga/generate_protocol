@@ -1,21 +1,24 @@
+from datetime import datetime, timezone
+
 from uuid import UUID
 import logging
+import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Body
-from sqlalchemy import update
+from sqlalchemy import update, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.core.db import get_db
 from common.core.db_service import update_status
-from common.models.orm_models import Operation
+from common.models.orm_models import Operation, RecognizeTask, OperationVersion, LlmTask
 
 from common.models.dto import (
     ProcessingParamsDTO,
-    OperationCreateResponseDTO, ProcessingStatus, AudioMetadata, StatusResponseDTO, CancelResponse
+    OperationCreateResponseDTO, ProcessingStatus, AudioMetadata, StatusResponseDTO, CancelResponse,
+    TaskStatus
 )
 from common.services.manage_files import clean_operation_catalog
-from common.services.queue import enqueue_task
-from common.services.s3_client import create_presigned_post, delete_object
+from common.services.s3_client import create_presigned_post, download_protocol, delete_operation_files
 
 QUEUE_NAME="recognize_tasks"
 SERVICE_NAME="[API]"
@@ -45,7 +48,7 @@ async def create_operation(audio_metadata: AudioMetadata,
 async def set_params(params: ProcessingParamsDTO,
                      db: AsyncSession = Depends(get_db)):
     await db.execute(update(Operation)
-        .where(Operation.id == params.operation_id)
+        .filter_by(id=params.operation_id)
         .values(
             params=params.form,
             status=ProcessingStatus.params_received
@@ -62,69 +65,97 @@ async def upload_audio(operation_id: UUID,
                        params: ProcessingParamsDTO,
                        db: AsyncSession = Depends(get_db)):
     logging.info(f"{SERVICE_NAME} Received form")
-    '''for key, value in params.form.items():
-        if key == "blocks":
-            value = '\n'.join([f"title: {block['title']}" for block in value])
-        logging.info(f"{key}: {value}")'''
+
     operation = await db.get(Operation, operation_id)
     if not operation:
         raise HTTPException(status_code=404, detail="Not found")
 
-    # Берём максимум из всех когда-либо использованных версий
-    all_versions = list(operation.prev_versions or [])
-    if operation.active_version:
-        all_versions.append(operation.active_version)
+    # 1. Деактивация всех предыдущих активных версий
+    await db.execute(
+        update(OperationVersion)
+        .filter_by(operation_id=operation_id, is_active=True)
+        .values(is_active=False, deactivated_at=datetime.now(timezone.utc))
+    )
 
-    current = max(all_versions) if len(all_versions) > 0  else 0
-    new_version = current + 1
-
-    prev = all_versions  # все предыдущие, включая только что вытесненную активную
+    # 2. Создание новой версии
+    new_version = OperationVersion(
+        operation_id=operation_id,
+        is_active=True,
+    )
+    db.add(new_version)
+    await db.flush()
+    await db.refresh(new_version)
 
     await db.execute(
         update(Operation)
-        .where(Operation.id == params.operation_id)
+        .filter_by(id=operation_id)
         .values(
-            params=params.form.model_dump(),
             status=ProcessingStatus.processing,
-            active_version=new_version,
-            prev_versions=prev,
         )
     )
+
+    # 3. Создание задачи recognize до публикации в очередь
+    recognize_task = RecognizeTask(
+        operation_id=operation_id,
+        version_id=new_version.id,
+        file_s3_key=params.s3_key,
+        params=params.form.model_dump(),
+        status=TaskStatus.pending,
+    )
+    db.add(recognize_task)
     await db.commit()
 
-    # отправляем задачу в worker
-    enqueue_task({
-        "operation_id": str(operation_id),
-        "file_s3_key": params.s3_key,
-        "version": new_version,
-    }, QUEUE_NAME)
+    return { "status": ProcessingStatus.processing, "versionId": str(new_version.id) }
 
-    return { "status": ProcessingStatus.processing, "version": new_version }
-
-@router.get("/operations/{operation_id}/status", response_model=StatusResponseDTO)
+@router.get("/operations/{operation_id}/status",
+            response_model=StatusResponseDTO)
 async def get_status(operation_id: UUID,
                      db: AsyncSession = Depends(get_db)):
     operation = await db.get(Operation, operation_id)
-
     if not operation:
         return {"status": "not_found"}
 
-    return {
-        "status": operation.status
-    }
+    # Ленивый переход в completed: проверяем llm_tasks один раз
+    if operation.status == ProcessingStatus.processing:
+        active_ver = await db.scalar(
+            select(OperationVersion)
+            .filter_by(operation_id=operation_id, is_active=True)
+        )
+        if active_ver:
+            new_status = await _derive_status(db, active_ver.id)
+            if new_status:
+                operation.status = new_status
+                await db.commit()
+
+    return {"status": operation.status}
 
 @router.get("/operations/{operation_id}/protocol")
 async def get_protocol(operation_id: UUID,
                      db: AsyncSession = Depends(get_db)):
+    active_ver = await db.scalar(
+        select(OperationVersion)
+        .filter_by(operation_id=operation_id, is_active=True)
+    )
+    if not active_ver:
+        raise HTTPException(status_code=409, detail="No active version")
+
+    llm_task = await db.scalar(
+        select(LlmTask)
+        .filter_by(version_id=active_ver.id)
+    )
+    if not llm_task:
+        raise HTTPException(status_code=425, detail="Not ready")
+
+    _, md_content = await asyncio.to_thread(
+        download_protocol, str(operation_id), str(active_ver.id)
+    )
+
     operation = await db.get(Operation, operation_id)
-
-    if not operation:
-        return {"status": "not_found"}
-
-    await update_status(db, operation.id, ProcessingStatus.closed)
+    operation.status = ProcessingStatus.closed
+    await db.commit()
 
     return {
-        "markdown": operation.md_res
+        "markdown": md_content
     }
 
 @router.post("/operations/{operation_id}/cancel", response_model=CancelResponse)
@@ -145,20 +176,13 @@ async def cancel_operation(
             detail=f"Cannot cancel operation with status '{operation.status}'"
         )
 
-    # Убираем активную версию → воркер увидит несоответствие
-    prev = list(operation.prev_versions or [])
-    if operation.active_version:
-        prev.append(operation.active_version)
-
+    # Деактивация активной версии — сервисы увидят is_active=False на следующей проверке
     await db.execute(
-        update(Operation)
-        .where(Operation.id == operation_id)
-        .values(
-            status=ProcessingStatus.cancelling,
-            active_version=None,  # ← версии больше нет
-            prev_versions=prev,
-        )
+        update(OperationVersion)
+        .filter_by(operation_id=operation_id, is_active=True)
+        .values(is_active=False, deactivated_at=datetime.now(timezone.utc))
     )
+    operation.status = ProcessingStatus.cancelling
     await db.commit()
 
     return CancelResponse(
@@ -180,12 +204,41 @@ async def delete_operation(
         operation_id: UUID,
         s3_key: str = Body(embed=True),
         db: AsyncSession = Depends(get_db)):
-    delete_object(s3_key)
+    await asyncio.to_thread(delete_operation_files,str(operation_id))
     clean_operation_catalog(str(operation_id))
 
-    await update_status(db, str(operation_id), ProcessingStatus.closed)
-    await db.commit()
+    try:
+        await update_status(db, str(operation_id), ProcessingStatus.closed)
+        await db.commit()
+    except ValueError:
+        pass
 
     return {
         "status": ProcessingStatus.closed
     }
+
+
+async def _derive_status(db: AsyncSession, version_id) -> ProcessingStatus | None:
+    """
+    Выводит статус операции из статусов её task-записей.
+    Возвращает None, если переход не требуется (всё ещё в работе).
+    """
+    # 1. Финальный шаг — llm_task. Его статус решает исход.
+    llm_task = await db.scalar(
+        select(LlmTask).filter_by(version_id=version_id)
+    )
+    if llm_task:
+        if llm_task.status == TaskStatus.done:
+            return ProcessingStatus.completed
+        if llm_task.status == TaskStatus.failed:
+            return ProcessingStatus.failed
+        return None  # pending / queued / processing — ждём
+
+    # 2. llm_task ещё не создан — проверяем предыдущий шаг
+    rec_task = await db.scalar(
+        select(RecognizeTask).filter_by(version_id=version_id)
+    )
+    if rec_task and rec_task.status == TaskStatus.failed:
+        return ProcessingStatus.failed
+
+    return None  # recognize ещё работает

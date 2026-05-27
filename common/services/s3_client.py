@@ -1,3 +1,5 @@
+from io import BytesIO
+
 import boto3
 import os
 from botocore.config import Config
@@ -32,12 +34,18 @@ _public_client = boto3.client(
     config=Config(signature_version="s3v4"),
 )
 
-def download_file(key: str, dest_path: str) -> None:
+def download_file(key: str, dest_path: str):
     """Скачивает файл внутри Docker-сети."""
     _internal_client.download_file(MINIO_BUCKET, key, dest_path)
 
 def delete_object(key: str):
     _internal_client.delete_object(Bucket=MINIO_BUCKET, Key=key)
+
+def write_file(text: str, key: str):
+    _internal_client.upload_fileobj(
+        BytesIO(text.encode('utf-8')),
+        MINIO_BUCKET,
+        Key=key)
 
 def is_object_exists(key: str) -> bool:
     try:
@@ -62,3 +70,79 @@ def create_presigned_post(object_key, expiration=3600, fields=None):
         return None
 
     return response
+
+
+# ---- Обработка результатов ---- #
+
+def upload_protocol(json_str: str, md_str: str,
+                    operation_id: str, version_id: str) -> str:
+    """Загружает оба файла протокола в S3. Возвращает базовый ключ."""
+    base_key = f"operations/{operation_id}/{version_id}"
+
+    _internal_client.put_object(
+        Bucket=MINIO_BUCKET,
+        Key=f"{base_key}/protocol.json",
+        Body=json_str.encode(),
+        ContentType="application/json",
+    )
+    _internal_client.put_object(
+        Bucket=MINIO_BUCKET,
+        Key=f"{base_key}/protocol.md",
+        Body=md_str.encode(),
+        ContentType="text/markdown",
+    )
+    return base_key
+
+
+def download_protocol(operation_id: str, version_id: str) -> tuple[str, str]:
+    """Скачивает json + md из S3. Бросает исключение если нет объекта."""
+    base_key = f"operations/{operation_id}/{version_id}"
+
+    json_obj = _internal_client.get_object(Bucket=MINIO_BUCKET,
+                                            Key=f"{base_key}/protocol.json")
+    md_obj   = _internal_client.get_object(Bucket=MINIO_BUCKET,
+                                            Key=f"{base_key}/protocol.md")
+
+    return json_obj["Body"].read().decode(), md_obj["Body"].read().decode()
+
+
+# Удаление всех файлов операции
+
+def delete_prefix(prefix: str) -> int:
+    """
+    Удаляет все объекты с заданным префиксом.
+    Возвращает количество удалённых объектов.
+    """
+    paginator = _internal_client.get_paginator("list_objects_v2")
+    pages = paginator.paginate(Bucket=MINIO_BUCKET, Prefix=prefix)
+
+    deleted_count = 0
+    for page in pages:
+        objects = page.get("Contents", [])
+        if not objects:
+            continue
+
+        delete_payload = {"Objects": [{"Key": obj["Key"]} for obj in objects]}
+        response = _internal_client.delete_objects(
+            Bucket=MINIO_BUCKET,
+            Delete=delete_payload,
+        )
+
+        errors = response.get("Errors", [])
+        if errors:
+            logging.error(f"{SERVICE_NAME} Errors while deleting prefix '{prefix}': {errors}")
+            raise ClientError(
+                {"Error": {"Code": errors[0]["Code"], "Message": errors[0]["Message"]}},
+                "DeleteObjects",
+            )
+
+        deleted_count += len(response.get("Deleted", []))
+
+    logging.info(f"{SERVICE_NAME} Deleted {deleted_count} objects under prefix '{prefix}'")
+    return deleted_count
+
+
+def delete_operation_files(operation_id: str) -> int:
+    """Удаляет все файлы операции из S3."""
+    prefix = f"operations/{operation_id}/"
+    return delete_prefix(prefix)

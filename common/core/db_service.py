@@ -1,12 +1,14 @@
 import logging
+from datetime import datetime, timezone
+from typing import Type
 
-from sqlalchemy import update
+import uuid
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from common.core.db import AsyncSessionLocal
 from common.models.dto import ProcessingStatus
 
-from common.models.orm_models import Operation
-
+from common.models.orm_models import Operation, OperationVersion
 
 async def update_status(db: AsyncSession, operation_id: str, status: str):
     operation = await db.get(Operation, operation_id)
@@ -24,70 +26,53 @@ async def safe_update_status(operation_id, status):
     except Exception:
         logging.exception("[DB] Failed to update status")
 
-async def get_status(operation_id):
-    try:
-        async with AsyncSessionLocal() as db:
-            operation = await db.get(Operation, operation_id)
-            return operation.status
-    except Exception:
-        logging.exception("[DB] Failed to get status")
-
-async def get_params(operation_id):
-    try:
-        async with AsyncSessionLocal() as db:
-            operation = await db.get(Operation, operation_id)
-            if not operation:
-                return None
-            return operation.params
-    except Exception:
-        logging.exception("[DB] Failed to get status")
-
-async def set_result(json_value, md_value, operation_id):
-    try:
-        async with AsyncSessionLocal() as db:
-            await db.execute(
-                update(Operation)
-                .where(Operation.id == operation_id)
-                .values(json_res=json_value,
-                        md_res=md_value)
-            )
-
-            await db.commit()
-    except Exception:
-        logging.exception("[DB] Failed to set result")
-
-async def is_cancelled(operation_id: str) -> bool:
-    """Проверяет, запрошена ли отмена операции."""
-    try:
-        async with AsyncSessionLocal() as db:
-            operation = await db.get(Operation, str(operation_id))
-            if not operation:
-                return False
-            return operation.status in (
-                ProcessingStatus.cancelling,
-                ProcessingStatus.cancelled,
-            )
-    except Exception:
-        logging.exception("[DB] Failed to check cancellation")
-        return False  # в случае ошибки не прерываем обработку
-
-async def is_version_active(operation_id: str, version: int) -> bool:
+async def is_version_active(version_id: str) -> bool:
     """
-    Возвращает True, только если version == active_version в БД.
-    Все остальные случаи (отмена, новый запуск, ошибка БД) → False.
-    """
+        Единственная функция проверки версии для всех воркеров.
+        Один SELECT по PK — без сравнения int-полей, без чтения operations.
+        """
     try:
         async with AsyncSessionLocal() as db:
-            op = await db.get(Operation, operation_id)
-            if not op or op.status == ProcessingStatus.closed:
-                return False
-            return op.active_version == version
+            ver = await db.get(OperationVersion, version_id)
+            return ver is not None and ver.is_active
     except Exception:
         logging.exception("[DB] Failed to check version")
-        return False  # безопаснее остановиться, чем продолжить
+        return False  # при ошибке остановка
 
-async def maybe_mark_cancelled(operation_id: str):
-    """Ставим cancelled только если статус всё ещё cancelling (не перезапущено)."""
-    status = await get_status(operation_id)
-    if status == ProcessingStatus.cancelling:
-        await safe_update_status(operation_id, ProcessingStatus.cancelled)
+async def deactivate_version(version_id: str) -> None:
+    """ Деактивация конкретной версии """
+    try:
+        async with AsyncSessionLocal() as db:
+            ver = await db.get(OperationVersion, version_id)
+            if ver and ver.is_active:
+                ver.is_active = False
+                ver.deactivated_at = datetime.now(timezone.utc)
+                await db.commit()
+    except Exception:
+        logging.exception("[DB] Failed to deactivate version")
+
+async def maybe_mark_cancelled(operation_id: str) -> None:
+    """
+    Переводит операцию в cancelled если нет ни одной активной версии.
+    Больше не опирается на статус 'cancelling'.
+    """
+    try:
+        async with AsyncSessionLocal() as db:
+            active = await db.scalar(
+                select(OperationVersion)
+                .filter_by(operation_id=operation_id, is_active=True)
+            )
+            if active:
+                return  # кто-то уже запустил новую версию, пропустить
+
+            operation = await db.get(Operation, operation_id)
+            if operation and operation.status == ProcessingStatus.cancelling:
+                operation.status = ProcessingStatus.cancelled
+                await db.commit()
+    except Exception:
+        logging.exception("[DB] Failed to mark cancelled")
+
+'''async def get_table_row(model: Type, row_id: uuid.UUID):
+    async with AsyncSessionLocal() as db:
+        row = await db.get(model, row_id)
+        return row'''

@@ -167,7 +167,7 @@ def build_protocol(
         form: dict,
         frames_meta: list[dict] | None = None,
         operation_id: str = None,
-        version=None,
+        version_id=None,
         loop=None):
     """
         Строит протокол встречи.
@@ -180,17 +180,16 @@ def build_protocol(
     # Выбираем стратегию чанкинга
     if frames_meta:
         raw_chunks = chunk_by_chars(transcript, frames_meta)
-        # raw_chunks: list[(text, [frame_path, ...])]
     else:
         raw_chunks = [(chunk, []) for chunk in chunk_text(transcript)]
 
     summaries = []
     for i, (text_chunk, frame_dicts) in enumerate(raw_chunks):
         # Чекпоинт между каждым чанком
-        if operation_id and version is not None and loop is not None:
+        if operation_id and version_id is not None and loop is not None:
             import asyncio
             future = asyncio.run_coroutine_threadsafe(
-                is_version_active(operation_id, version),
+                is_version_active(version_id),
                 loop
             )
             try:
@@ -201,7 +200,7 @@ def build_protocol(
 
             if not still_active:
                 raise VersionOutdatedError(
-                    f"v{version} outdated at chunk {i}/{len(raw_chunks)}"
+                    f"v{version_id} outdated at chunk {i}/{len(raw_chunks)}"
                 )
 
         images_b64 = [frame_dict["b64"] for frame_dict in frame_dicts] if frame_dicts else None

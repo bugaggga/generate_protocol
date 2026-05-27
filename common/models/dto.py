@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import List
 from enum import Enum
 from uuid import UUID
 from typing import Annotated, Literal, Union
@@ -21,6 +20,18 @@ class ProcessingStatus(str, Enum):
     cancelling = "cancelling"
     cancelled = "cancelled"
 
+class TaskStatus(str, Enum):
+    pending = "pending",
+    queued = "queued"
+    processing = "processing",
+    done = "done",
+    failed = "failed"
+
+class EventType(str, Enum):
+    RECOGNIZE_REQUESTED = "RECOGNIZE_REQUESTED"
+    RECOGNIZE_COMPLETED = "RECOGNIZE_COMPLETED"
+    LLM_COMPLETED = "LLM_COMPLETED"
+    PROCESSING_FAILED = "PROCESSING_FAILED"
 
 # API models
 

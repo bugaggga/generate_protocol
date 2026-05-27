@@ -36,6 +36,17 @@ services:
       worker-recognize:
         condition: service_started
 
+  outbox:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    command: python -m app.infrastructure.worker
+    env_file:
+      - .env
+    depends_on:
+      - api
+    restart: unless-stopped
+
   # Сервис распознавания аудиовизуальных данных
   worker-recognize:
     build:
@@ -137,7 +148,7 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
-    runtime: nvidia
+    #runtime: nvidia
     restart: unless-stopped
 
   ollama-init:

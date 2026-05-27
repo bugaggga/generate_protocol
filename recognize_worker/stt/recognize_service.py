@@ -29,7 +29,7 @@ class RecognizeService:
             model_name = "large"
         else:
             compute_type = "int8"
-            model_name = "medium"
+            model_name = "small"
 
         self.model = WhisperModel(
             model_name,

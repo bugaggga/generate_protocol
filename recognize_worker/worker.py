@@ -2,14 +2,16 @@ import json
 import logging
 import os
 
-from common.core.db_service import safe_update_status, get_status, is_version_active, \
-    maybe_mark_cancelled
-from common.models.dto import ProcessingStatus
-from common.services.queue import async_consume, publish
+from common.core.db import AsyncSessionLocal
+from common.core.db_service import safe_update_status, is_version_active, \
+    maybe_mark_cancelled, deactivate_version
+from common.models.dto import ProcessingStatus, TaskStatus
+from common.models.orm_models import RecognizeTask, LlmTask
+from common.services.queue import async_consume
 from recognize_worker.stt.recognize_service import RecognizeService
 import asyncio
 import aio_pika
-from common.services.s3_client import is_object_exists
+from common.services.s3_client import write_file
 
 MAX_RETRIES = 3
 RETRY_DELAY = 3  # сек
@@ -23,59 +25,77 @@ recognize_service = RecognizeService(model_path="models/stt")
 
 async def process_stt(message: aio_pika.IncomingMessage):
     body = json.loads(message.body)
+    recognize_task_id = body["id"]  # ← только id
     operation_id = body["operation_id"]
-    s3_key = body["file_s3_key"]
-    version = body["version"]
+    version_id = body["version_id"]
 
-    # Чекпоинт 1: до начала тяжёлой работы
-    if not await is_version_active(operation_id, version):
-        logging.info(f"{SERVICE_NAME} v{version} outdated, skipping")
+    # Проверка №1
+    if not await is_version_active(version_id):
         await message.ack()
         await maybe_mark_cancelled(operation_id)
         return
 
-    status = await get_status(operation_id)
-    if status == ProcessingStatus.partially_completed:
-        await message.ack()
-        return
+    rec_task = await get_task(recognize_task_id,
+                                     message)
+    if not rec_task: return
+    rec_task_id = rec_task.id
 
-    logging.info(f"{SERVICE_NAME} Received task: {operation_id}")
-
-    # Файл есть в S3?
-    if not is_object_exists(s3_key):
-        logging.info(f"{SERVICE_NAME} Wait for object in s3...")
-        await asyncio.sleep(8)
-        await message.nack(requeue=True)
-        return
+    logging.info(f"{SERVICE_NAME} Received task: {recognize_task_id}")
 
     await message.ack()
 
     try:
-        txt_file, frames_meta = await process_with_retry(operation_id, s3_key)
+        transcript_key, frames_meta = await process_with_retry(operation_id, rec_task.file_s3_key)
 
-        # Чекпоинт 2: после транскрипции (может занять минуты)
-        if not await is_version_active(operation_id, version):
-            logging.info(f"{SERVICE_NAME} v{version} outdated after STT, stopping")
+        # Проверка №2
+        if not await is_version_active(version_id):
+            logging.info(f"{SERVICE_NAME} v{version_id} outdated after STT, stopping")
+            await deactivate_version(version_id)  # уже деактивирована, но для явности
             await maybe_mark_cancelled(operation_id)
             return
 
-        # отправка в LLM очередь
-        await publish_llm_task(operation_id, txt_file, frames_meta, version)
-
-        await safe_update_status(operation_id, ProcessingStatus.partially_completed)
+        async with AsyncSessionLocal() as db:
+            rec_task = await db.get(RecognizeTask, rec_task_id)
+            # Создание задачи на генерацию
+            llm_task = LlmTask(
+                operation_id=operation_id,
+                version_id=version_id,
+                transcript_s3_key=transcript_key,
+                frames_meta=frames_meta,
+                params=rec_task.params,
+                status=TaskStatus.pending
+            )
+            db.add(llm_task)
+            rec_task.status = TaskStatus.done
+            await db.commit()
 
     except Exception:
         logging.exception(f"{SERVICE_NAME} Failed")
-        await safe_update_status(operation_id, ProcessingStatus.failed)
+        async with AsyncSessionLocal() as db:  # ← только своя таблица
+            task = await db.get(RecognizeTask, rec_task_id)
+            task.status = TaskStatus.failed
+            await db.commit()
+
+async def get_task(task_id, message: aio_pika.IncomingMessage) -> RecognizeTask | None:
+    async with AsyncSessionLocal() as db:
+        # Получение задачи на генерацию
+        task = await db.get(RecognizeTask, task_id)
+        if not task or task.status != TaskStatus.queued:
+            await message.ack()
+            return
+        task.status = TaskStatus.processing
+
+        await db.commit()
+        return task
 
 async def process_with_retry(operation_id: str, s3_key: str) -> tuple[str, list[dict] | None]:
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             logging.info(f"{SERVICE_NAME} Attempt {attempt}/{MAX_RETRIES}")
 
-            file_path, frames_meta = await process_pipeline(operation_id, s3_key)
+            transcript_key, frames_meta = await process_pipeline(operation_id, s3_key)
 
-            return  file_path, frames_meta # успех
+            return  transcript_key, frames_meta # успех
 
         except Exception:
             logging.exception(f"{SERVICE_NAME} Attempt {attempt} failed")
@@ -95,17 +115,11 @@ async def process_pipeline(operation_id: str, s3_key: str) -> tuple[str, list[di
         operation_id
     )
 
+    transcript_key = f"operations/{operation_id}/transcript.txt"
+    write_file(transcript, transcript_key)
     txt_file = save_to_txt(transcript, operation_id)
 
-    return txt_file, frames_meta
-
-async def publish_llm_task(operation_id: str, transcript_path: str, frames_meta: list[dict] | None, version: int):
-    await publish(TO_LLM_QUEUE, {
-        "operation_id": operation_id,
-        "transcript_path": transcript_path,
-        "frames_meta": frames_meta,
-        "version": version,
-    })
+    return transcript_key, frames_meta
 
 def save_to_txt(text: str, operation_id: str) -> str:
     dir_path = f"/worker/tmp/{operation_id}"

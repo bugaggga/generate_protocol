@@ -40,8 +40,7 @@ export function useUpload(apiBase, formJson, operationId, activeUploadState) {
     try {
       setPhase(UPLOAD_PHASES.UPLOADING);
       log("Загрузка файла в S3...");
- 
-      //await uploadFileWithProgress(op.file, op.s3_presigned_url, p => setProgress(p));
+
       await uploadFileWithProgressAndRetry(
       apiBase,
       op.file,

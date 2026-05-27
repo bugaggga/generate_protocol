@@ -3,12 +3,14 @@ import aio_pika
 import asyncio
 import logging
 
-from common.core.db_service import safe_update_status, get_status, get_params, set_result, \
-    is_version_active, maybe_mark_cancelled
-from common.models.dto import ProcessingStatus
-from common.services.queue import async_consume, publish
+from common.core.db import AsyncSessionLocal
+from common.core.db_service import is_version_active, maybe_mark_cancelled
+from common.models.dto import TaskStatus
+from common.models.orm_models import LlmTask
+from common.services.queue import async_consume
+from common.services.s3_client import download_file, upload_protocol
 from llm_worker.llm.llm_service import build_protocol
-from llm_worker.llm.manage_protocol import save_protocol, read_file
+from llm_worker.llm.manage_protocol import read_file, save_protocol
 
 LLM_QUEUE="llm_tasks"
 SERVICE_NAME="[LLM Worker]"
@@ -17,25 +19,26 @@ logging.basicConfig(level=logging.INFO)
 
 async def process_llm(message: aio_pika.IncomingMessage):
     body = json.loads(message.body)
+    llm_task_id = body["id"]
     operation_id = body["operation_id"]
-    transcript_path = body["transcript_path"]
-    frames_meta = body.get("frames_meta")
-    version = body["version"]
+    version_id = body["version_id"]
 
-    # Чекпоинт 1
-    if not await is_version_active(operation_id, version):
+    # Проверка №1
+    if not await is_version_active(version_id):
         await message.ack()
         await maybe_mark_cancelled(operation_id)
         return
 
+    llm_task = await get_task(llm_task_id,
+                                     message)
+    if not llm_task: return
+
+    await message.ack()  # early ack
+
     try:
-        await message.ack()  # early ack
 
-        form = await get_params(operation_id)
-        status = await get_status(operation_id)
-        if status == ProcessingStatus.completed:
-            return
-
+        transcript_path = f"/worker/tmp/{operation_id}/transcription.txt"
+        download_file(llm_task.transcript_s3_key, transcript_path)
         transcript = read_file(transcript_path)
 
         loop = asyncio.get_event_loop()  # берём loop до входа в поток
@@ -43,10 +46,10 @@ async def process_llm(message: aio_pika.IncomingMessage):
         json_protocol, md_protocol = await asyncio.to_thread(
             build_protocol,
             transcript,
-            form,
-            frames_meta,
+            llm_task.params,
+            llm_task.frames_meta,
             str(operation_id),
-            version,
+            version_id,
             loop,
         )
 
@@ -54,28 +57,43 @@ async def process_llm(message: aio_pika.IncomingMessage):
         logging.info(f"{SERVICE_NAME}: json_Protocol saved in {save_protocol(json_protocol, json_folder)}")
         logging.info(f"{SERVICE_NAME}: Protocol saved in {save_protocol(md_protocol, operation_id)}")
 
+        # Результат — в S3
+        await asyncio.to_thread(
+            upload_protocol,
+            json_protocol, md_protocol, operation_id, version_id
+        )
+
+        # 2. Обновление статуса
+        async with AsyncSessionLocal() as db:
+            llm_task = await db.get(LlmTask, llm_task_id)
+            llm_task.status = TaskStatus.done
+            await db.commit()
+
         logging.info(f"{SERVICE_NAME}: Setting result...")
-        await set_result(json.loads(json_protocol), md_protocol, operation_id)
-        await safe_update_status(operation_id, ProcessingStatus.completed)
 
     except asyncio.CancelledError:
         # Штатная отмена — не ошибка
-        logging.info(f"{SERVICE_NAME} v{version} outdated during LLM, stopping")
+        logging.info(f"{SERVICE_NAME} v{version_id} outdated during LLM, stopping")
         await maybe_mark_cancelled(operation_id)
 
     except Exception:
-        # отправка в LLM очередь
-        #await publish_llm_task(operation_id, transcript_path)
-
         logging.exception(f"{SERVICE_NAME} Failed")
-        await safe_update_status(operation_id, ProcessingStatus.failed)
+        async with AsyncSessionLocal() as db:  # ← только своя таблица
+            task = await db.get(LlmTask, llm_task_id)
+            task.status = TaskStatus.failed
+            await db.commit()
 
+async def get_task(task_id, message: aio_pika.IncomingMessage) ->  LlmTask | None:
+    async with AsyncSessionLocal() as db:
+        # Получение задачи на генерацию
+        task = await db.get(LlmTask, task_id)
+        if not task or task.status != TaskStatus.queued:
+            await message.ack()
+            return
+        task.status = TaskStatus.processing
 
-async def publish_llm_task(operation_id: str, transcript_path: str):
-    await publish(LLM_QUEUE, {
-        "operation_id": operation_id,
-        "transcript_path": transcript_path
-    })
+        await db.commit()
+        return task
 
 async def main():
     logging.info(f"{SERVICE_NAME} Starting...")
