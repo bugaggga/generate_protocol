@@ -20,18 +20,18 @@ logging.basicConfig(level=logging.INFO)
 async def process_llm(message: aio_pika.IncomingMessage):
     body = json.loads(message.body)
     llm_task_id = body["id"]
-    operation_id = body["operation_id"]
-    version_id = body["version_id"]
+
+    llm_task = await get_task(llm_task_id,
+                              message)
+    if not llm_task: return
+    operation_id = llm_task.operation_id
+    version_id = llm_task.version_id
 
     # Проверка №1
     if not await is_version_active(version_id):
         await message.ack()
         await maybe_mark_cancelled(operation_id)
         return
-
-    llm_task = await get_task(llm_task_id,
-                                     message)
-    if not llm_task: return
 
     await message.ack()  # early ack
 

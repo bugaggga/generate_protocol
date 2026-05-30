@@ -25,9 +25,13 @@ recognize_service = RecognizeService(model_path="models/stt")
 
 async def process_stt(message: aio_pika.IncomingMessage):
     body = json.loads(message.body)
-    recognize_task_id = body["id"]  # ← только id
-    operation_id = body["operation_id"]
-    version_id = body["version_id"]
+    rec_task_id = body["id"]  # ← только id
+
+    rec_task = await get_task(rec_task_id,
+                              message)
+    if not rec_task: return
+    operation_id = rec_task.operation_id
+    version_id = rec_task.version_id
 
     # Проверка №1
     if not await is_version_active(version_id):
@@ -35,12 +39,7 @@ async def process_stt(message: aio_pika.IncomingMessage):
         await maybe_mark_cancelled(operation_id)
         return
 
-    rec_task = await get_task(recognize_task_id,
-                                     message)
-    if not rec_task: return
-    rec_task_id = rec_task.id
-
-    logging.info(f"{SERVICE_NAME} Received task: {recognize_task_id}")
+    logging.info(f"{SERVICE_NAME} Received task: {rec_task_id}")
 
     await message.ack()
 

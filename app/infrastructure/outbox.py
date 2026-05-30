@@ -43,8 +43,6 @@ async def outbox_table(table_model: BaseTask, queue_name: str, id_field: str, ba
             for row in rows:
                 await publish(queue_name, {
                     "id": str(row.id),               # recognize_task_id / llm_task_id
-                    "version_id": str(row.version_id),
-                    "operation_id": str(row.operation_id),
                 })
                 row.status = TaskStatus.queued
             if rows:
