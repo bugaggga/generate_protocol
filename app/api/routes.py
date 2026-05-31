@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 import logging
 import asyncio
+import shutil
 
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy import update, select
@@ -20,8 +21,8 @@ from common.models.dto import (
 from common.services.manage_files import clean_operation_catalog
 from common.services.s3_client import create_presigned_post, download_protocol, delete_operation_files
 
-QUEUE_NAME="recognize_tasks"
 SERVICE_NAME="[API]"
+tmp_dir = "/app/tmp"
 
 router = APIRouter(prefix="/api")
 
@@ -202,10 +203,10 @@ async def get_presigned_url(s3_key: str = Body(embed=True)):
 @router.delete("/operations/{operation_id}")
 async def delete_operation(
         operation_id: UUID,
-        s3_key: str = Body(embed=True),
         db: AsyncSession = Depends(get_db)):
     await asyncio.to_thread(delete_operation_files,str(operation_id))
     clean_operation_catalog(str(operation_id))
+    shutil.rmtree(f"{tmp_dir}/{str(operation_id)}", ignore_errors=True)
 
     try:
         await update_status(db, str(operation_id), ProcessingStatus.closed)

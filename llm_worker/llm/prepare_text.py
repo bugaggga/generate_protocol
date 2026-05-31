@@ -134,7 +134,7 @@ def _fmt_ts(seconds: float) -> str:
 # Символьный чанкинг (fallback для аудио без кадров)
 # ---------------------------------------------------------------------------
 
-def chunk_text(transcript: str, chunk_size: int = 3000, overlap: int = 250) -> list[str]:
+def chunk_text(transcript: str, chunk_size: int = 2000, overlap: int = 500) -> list[str]:
     """
         Разбивает транскрипт на чанки по числу символов, не разрывая сегменты.
         Используется для аудио (без фреймов) — возвращает список строк.
@@ -166,49 +166,37 @@ def chunk_text(transcript: str, chunk_size: int = 3000, overlap: int = 250) -> l
 # Объединение Результатов
 #-------------------------------
 
-def group_items(items: list[str], group_size: int) -> list[list[str]]:
-    """Разбивает список на группы фиксированного размера"""
-    return [items[i:i + group_size] for i in range(0, len(items), group_size)]
 
+def _merge_content(acc, new):
+    if isinstance(acc, dict):
+        out = dict(acc)
+        for k, v in new.items():
+            if v and not out.get(k):
+                out[k] = v
+        return out
+    # list-блок и строковый блок: оба накапливаем как список, с дедупом
+    out = list(acc)
+    items = new if isinstance(new, list) else ([new] if new else [])
+    for x in items:
+        if x not in out:
+            out.append(x)
+    return out
 
-def hierarchical_merge(
-    summaries: list[str],
-    merge_fn,
-    group_size: int = 4,
-    max_iterations: int = 10,
-) -> str:
-    """
-    Многоуровневое объединение summaries
+def _init_content(content):
+    if isinstance(content, list):
+        return []
+    if isinstance(content, dict):
+        return {}
+    return []   # строковые блоки тоже накапливаем как список кусков
 
-    :param summaries: список частичных суммаризаций
-    :param merge_fn: функция вызова LLM (принимает список текстов → возвращает текст)
-    :param group_size: сколько summaries объединять за раз
-    :param max_iterations: защита от бесконечного цикла
-    :return: финальный протокол
-    """
-
-    current_level = summaries
-    iteration = 0
-
-    while len(current_level) > 1:
-        iteration += 1
-
-        if iteration > max_iterations:
-            raise RuntimeError("Too many merge iterations")
-
-        logging.info(f"{SERVICE_NAME} Level {iteration}, items: {len(current_level)}")
-
-        grouped = group_items(current_level, group_size)
-
-        next_level = []
-
-        for group in grouped:
-            if len(group) < 2:
-                next_level.extend(group)
-                continue
-            merged = merge_fn(group)  # ← вызов LLM
-            next_level.append(merged)
-
-        current_level = next_level
-
-    return current_level[0]
+def merge_protocol(parts: list[dict]) -> dict:
+    acc, order = {}, []
+    for part in parts:
+        for b in part["blocks"]:
+            bid = b["id"]
+            if bid not in acc:
+                acc[bid] = {"id": bid, "title": b["title"],
+                            "content": _init_content(b["content"])}
+                order.append(bid)
+            acc[bid]["content"] = _merge_content(acc[bid]["content"], b["content"])
+    return {"blocks": [acc[i] for i in order]}

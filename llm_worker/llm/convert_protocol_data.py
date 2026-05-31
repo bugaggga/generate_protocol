@@ -2,7 +2,7 @@ import json
 
 import re
 
-def _extract_json(text: str) -> str:
+def _extract_json(text: str) -> dict:
     """
     Извлекает JSON из ответа модели, обрабатывая типичные случаи:
     - markdown-обёртки ```json ... ```
@@ -21,8 +21,8 @@ def _extract_json(text: str) -> str:
 
     # Пробуем распарсить напрямую
     try:
-        json.loads(text)
-        return text
+        data = json.loads(text)
+        return data
     except json.JSONDecodeError:
         pass
 
@@ -31,15 +31,15 @@ def _extract_json(text: str) -> str:
     if match:
         candidate = match.group(0)
         try:
-            json.loads(candidate)
-            return candidate
+            data = json.loads(candidate)
+            return data
         except json.JSONDecodeError:
             pass
 
     raise ValueError(f"No valid JSON found in model response: {text[:200]!r}")
 
 
-def json_to_markdown(response_json: str | dict) -> str:
+def json_to_markdown(response_json: dict) -> str:
     """
     Преобразует JSON-ответ модели в Markdown формат.
 
@@ -49,10 +49,7 @@ def json_to_markdown(response_json: str | dict) -> str:
     Returns:
         Отформатированная Markdown строка
     """
-    data = {}
-    # Парсим JSON, если передана строка
-    if isinstance(response_json, str):
-        data = json.loads(response_json)
+    data = response_json
 
     markdown_parts = ["# Протокол встречи\n"]
 

@@ -30,6 +30,7 @@ services:
     volumes:
       - ./app:/app/app
       - ./common:/app/common
+      - ./tmp_data:/app/tmp
     depends_on:
       minio:
         condition: service_healthy

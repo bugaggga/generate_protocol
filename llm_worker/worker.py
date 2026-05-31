@@ -52,15 +52,12 @@ async def process_llm(message: aio_pika.IncomingMessage):
             version_id,
             loop,
         )
-
-        json_folder = f"{operation_id}/json"
-        logging.info(f"{SERVICE_NAME}: json_Protocol saved in {save_protocol(json_protocol, json_folder)}")
-        logging.info(f"{SERVICE_NAME}: Protocol saved in {save_protocol(md_protocol, operation_id)}")
+        json_str = json.dumps(json_protocol, ensure_ascii=False, indent=2)
 
         # Результат — в S3
         await asyncio.to_thread(
             upload_protocol,
-            json_protocol, md_protocol, operation_id, version_id
+            json_str, md_protocol, operation_id, version_id
         )
 
         # 2. Обновление статуса

@@ -134,7 +134,7 @@ export function AppProvider({ children }) {
         } catch (err) {
           console.warn(`[polling] ${opId.slice(0, 8)}… error (will retry):`, err.message);
         }
-      }, 3000);
+      }, 20000);
     });
   }, [operationUploads]);
 
