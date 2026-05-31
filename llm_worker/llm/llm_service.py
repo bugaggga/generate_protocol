@@ -157,6 +157,7 @@ def build_protocol(
     else:
         raw_chunks = [(chunk, []) for chunk in chunk_text(transcript)]
 
+    logging.info(f"{SERVICE_NAME} Transcript: {raw_chunks[0]}")
     summaries = []
     for i, (text_chunk, frame_dicts) in enumerate(raw_chunks):
         # Чекпоинт между каждым чанком

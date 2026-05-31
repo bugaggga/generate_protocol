@@ -14,6 +14,11 @@ def _parse_timestamp(mm: str, ss: str) -> float:
     """'01', '30' → 90.0"""
     return int(mm) * 60 + int(ss)
 
+'''def reverse_parse_timestamp(stamp: float) -> str:
+    ss = stamp % 60
+    mm = stamp // 60
+    return f"{mm}:{ss}"'''
+
 
 def parse_timed_transcript(transcript: str) -> list[tuple[float, float, str]]:
     """
@@ -24,7 +29,7 @@ def parse_timed_transcript(transcript: str) -> list[tuple[float, float, str]]:
     for m in _TS_RE.finditer(transcript):
         start = _parse_timestamp(m.group(1), m.group(2))
         end = _parse_timestamp(m.group(3), m.group(4))
-        text = m.group(5).strip()
+        text = f"{m.group(1)}:{m.group(2)}-{m.group(3)}:{m.group(4)} {m.group(5)}".strip()
         if text:
             segments.append((start, end, text))
     return segments
@@ -159,7 +164,6 @@ def chunk_text(transcript: str, chunk_size: int = 2000, overlap: int = 500) -> l
         f"(chunk_size={chunk_size}, overlap={overlap}, total_chars={total_chars})"
     )
     return result
-
 
 
 #-------------------------------
