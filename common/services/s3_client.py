@@ -5,6 +5,7 @@ import os
 from botocore.config import Config
 from botocore.exceptions import ClientError
 import logging
+import json
 
 AWS_BUCKET = os.getenv("AWS_S3_BUCKET")
 MINIO_BUCKET = os.getenv("MINIO_S3_BUCKET")
@@ -38,6 +39,11 @@ def download_file(key: str, dest_path: str):
     """Скачивает файл внутри Docker-сети."""
     _internal_client.download_file(MINIO_BUCKET, key, dest_path)
 
+def get_file(key: str):
+    response = _internal_client.get_object(Bucket=MINIO_BUCKET, Key=key)
+    content = response["Body"].read().decode("utf-8")
+    return content
+
 def delete_object(key: str):
     _internal_client.delete_object(Bucket=MINIO_BUCKET, Key=key)
 
@@ -46,6 +52,23 @@ def write_file(text: str, key: str):
         BytesIO(text.encode('utf-8')),
         MINIO_BUCKET,
         Key=key)
+
+def save_frames_to_s3(frames_meta: list[dict], key: str) -> None:
+    lines = "\n".join(json.dumps(frame, ensure_ascii=False) for frame in frames_meta)
+
+    _internal_client.put_object(
+        Bucket=MINIO_BUCKET,
+        Key=key,
+        Body=lines.encode("utf-8"),
+        ContentType="application/x-ndjson",
+    )
+
+def load_frames_from_s3(key: str) -> list[dict] | None:
+    if not key:
+        return
+
+    content = get_file(key)
+    return [json.loads(line) for line in content.splitlines() if line.strip()]
 
 def is_object_exists(key: str) -> bool:
     try:

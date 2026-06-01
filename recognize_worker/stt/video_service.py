@@ -3,11 +3,12 @@ import os
 import base64
 import logging
 from pathlib import Path
+import cv2
+import numpy as np
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434")
-VISION_MODEL = os.getenv("VISION_MODEL", "moondream:1.8b")
 FRAME_INTERVAL = int(os.getenv("FRAME_INTERVAL_SEC", "30"))  # секунд между кадрами
-MAX_FRAMES = int(os.getenv("MAX_FRAMES", "120"))              # лимит кадров
+SCENE_THRESHOLD = 30.0  # чувствительность scene detection (20–40)
+#MAX_FRAMES = int(os.getenv("MAX_FRAMES", "120"))              # лимит кадров
 SERVICE_NAME = "[VideoService]"
 
 def _require_file(path: str) -> None:
@@ -50,64 +51,6 @@ def extract_audio(video_path: Path, output_path: Path) -> str:
     )
     return str(output_path)
 
-
-def get_video_duration(file_path: str) -> float:
-    """
-    Возвращает длительность видео в секундах.
-    Три уровня fallback для надёжной работы с любыми контейнерами
-    (в т.ч. записи экрана, OBS, незакрытые файлы без moov atom в начале).
-    """
-
-    def _parse(raw: str) -> float | None:
-        v = raw.strip()
-        if v and v != "N/A":
-            try:
-                return float(v)
-            except ValueError:
-                pass
-        return None
-
-    # 1) Длительность из контейнера (быстро, но бывает N/A или пусто)
-    r = subprocess.run(
-        ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-         "-of", "csv=p=0", file_path],
-        capture_output=True, text=True,
-    )
-    if (d := _parse(r.stdout)) is not None:
-        return d
-
-    # 2) Длительность из видеопотока (помогает при отсутствии duration в заголовке)
-    r = subprocess.run(
-        ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
-         "-show_entries", "stream=duration", "-of", "csv=p=0", file_path],
-        capture_output=True, text=True,
-    )
-    if (d := _parse(r.stdout)) is not None:
-        return d
-
-    # 3) Вычисляем из nb_frames / frame_rate (работает даже для «сырых» файлов)
-    r = subprocess.run(
-        ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
-         "-show_entries", "stream=nb_frames,r_frame_rate",
-         "-of", "csv=p=0", file_path],
-        capture_output=True, text=True,
-    )
-    raw = r.stdout.strip()
-    if raw and raw != "N/A":
-        parts = raw.split(",")
-        if len(parts) == 2:
-            try:
-                fps_parts = parts[0].split("/")
-                fps = float(fps_parts[0]) / float(fps_parts[1]) if len(fps_parts) == 2 else float(fps_parts[0])
-                nb_frames = int(parts[1])
-                return nb_frames / fps
-            except (ValueError, ZeroDivisionError):
-                pass
-
-    logging.warning(f"{SERVICE_NAME} Could not determine video duration via ffprobe; "
-                    f"will extract frames without interval adaptation")
-    return 0.0
-
 def extract_frames(video_path: str, output_dir: str) -> list[tuple[str, float]]:
     """
         Извлекает ключевые кадры из видео.
@@ -117,38 +60,79 @@ def extract_frames(video_path: str, output_dir: str) -> list[tuple[str, float]]:
     _require_file(video_path)
     os.makedirs(output_dir, exist_ok=True)
 
-    duration = get_video_duration(video_path)
-    if duration > 0:
-        interval = max(FRAME_INTERVAL, int(duration / MAX_FRAMES))
-        logging.info(f"{SERVICE_NAME} Duration={duration:.0f}s, interval={interval}s, "
-                     f"expected≈{int(duration / interval)} frames")
-    else:
-        interval = FRAME_INTERVAL
-        logging.info(f"{SERVICE_NAME} Duration unknown, interval={interval}s")
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = total_frames / fps
 
-    output_pattern = os.path.join(output_dir, "frame_%04d.jpg")
-    result = subprocess.run(
-        ["ffmpeg", "-y", "-i", video_path,
-         "-vf", f"fps=1/{interval},scale=1280:-2", "-q:v", "3", output_pattern],
-        capture_output=True, text=True,
+    # fallback-интервал в кадрах (не реже чем раз в N секунд)
+    fallback_interval_sec = FRAME_INTERVAL
+    fallback_interval_frames = int(fallback_interval_sec * fps)
+
+    logging.info(
+        f"{SERVICE_NAME} Duration={duration:.0f}s, fps={fps:.1f}, "
+        f"fallback_interval={fallback_interval_sec}s"
     )
-    if result.returncode != 0:
-        logging.warning(f"{SERVICE_NAME} ffmpeg extraction rc={result.returncode}: "
-                        f"{result.stderr[-300:] if result.stderr else ''}")
 
-    frame_files = sorted(f for f in os.listdir(output_dir) if f.endswith(".jpg"))
+    selected = []  # (frame_idx, timestamp, frame)
+    prev_gray = None
+    last_captured_idx = -fallback_interval_frames
+    frame_idx = 0
 
-    # Временная метка для каждого кадра:
-    # frame_0001.jpg → t=0, frame_0002.jpg → t=interval, ...
-    frames_with_ts = [
-        (os.path.join(output_dir, fname), i * interval)
-        for i, fname in enumerate(frame_files)
-    ]
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-    limited = frames_with_ts[:MAX_FRAMES]
-    logging.info(f"{SERVICE_NAME} Extracted {len(limited)} frames with timestamps "
-                 f"[0 .. {limited[-1][1] if limited else 0}s]")
-    return limited
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        frames_since_last = frame_idx - last_captured_idx
+
+        should_capture = False
+
+        if prev_gray is not None:
+            diff = np.mean(cv2.absdiff(gray, prev_gray))
+            if diff > SCENE_THRESHOLD:
+                should_capture = True
+
+        if frames_since_last >= fallback_interval_frames:
+            should_capture = True
+
+        if should_capture:
+            timestamp = frame_idx / fps  # ← вот и метка
+            selected.append((frame_idx, timestamp, frame.copy()))
+            last_captured_idx = frame_idx
+
+        prev_gray = gray
+        frame_idx += 1
+
+    cap.release()
+
+    # Если набрали больше MAX_FRAMES — прореживаем равномерно
+    #if len(selected) > MAX_FRAMES:
+    #    indices = np.linspace(0, len(selected) - 1, MAX_FRAMES, dtype=int)
+    #    selected = [selected[i] for i in indices]'''
+
+    # Сохранение и масштабирование
+    frames_with_ts = []
+    for i, (frame_idx, timestamp, frame) in enumerate(selected):
+        fname = f"frame_{i + 1:04d}.jpg"
+        fpath = os.path.join(output_dir, fname)
+
+        # масштабируем до 1280px по ширине
+        h, w = frame.shape[:2]
+        if w > 1280:
+            scale = 1280 / w
+            frame = cv2.resize(frame, (1280, int(h * scale)))
+
+        cv2.imwrite(fpath, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        frames_with_ts.append((fpath, timestamp))
+
+    logging.info(
+        f"{SERVICE_NAME} Extracted {len(frames_with_ts)} frames, "
+        f"timestamps: {[round(ts, 1) for _, ts in frames_with_ts]}"
+    )
+
+    return frames_with_ts
 
 
 def _encode_frame_b64(path: str) -> str | None:

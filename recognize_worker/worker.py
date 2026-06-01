@@ -11,7 +11,7 @@ from common.services.queue import async_consume
 from recognize_worker.stt.recognize_service import RecognizeService
 import asyncio
 import aio_pika
-from common.services.s3_client import write_file
+from common.services.s3_client import write_file, save_frames_to_s3
 
 MAX_RETRIES = 3
 RETRY_DELAY = 3  # сек
@@ -44,7 +44,7 @@ async def process_stt(message: aio_pika.IncomingMessage):
     await message.ack()
 
     try:
-        transcript_key, frames_meta = await process_with_retry(operation_id, rec_task.file_s3_key)
+        transcript_key, frames_key = await process_with_retry(operation_id, rec_task.file_s3_key)
 
         # Проверка №2
         if not await is_version_active(version_id):
@@ -60,7 +60,7 @@ async def process_stt(message: aio_pika.IncomingMessage):
                 operation_id=operation_id,
                 version_id=version_id,
                 transcript_s3_key=transcript_key,
-                frames_meta=frames_meta,
+                frames_key=frames_key,
                 params=rec_task.params,
                 status=TaskStatus.pending
             )
@@ -87,14 +87,14 @@ async def get_task(task_id, message: aio_pika.IncomingMessage) -> RecognizeTask 
         await db.commit()
         return task
 
-async def process_with_retry(operation_id: str, s3_key: str) -> tuple[str, list[dict] | None]:
+async def process_with_retry(operation_id: str, s3_key: str) -> tuple[str, str | None]:
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             logging.info(f"{SERVICE_NAME} Attempt {attempt}/{MAX_RETRIES}")
 
-            transcript_key, frames_meta = await process_pipeline(operation_id, s3_key)
+            transcript_key, frames_key = await process_pipeline(operation_id, s3_key)
 
-            return  transcript_key, frames_meta # успех
+            return  transcript_key, frames_key # успех
 
         except Exception:
             logging.exception(f"{SERVICE_NAME} Attempt {attempt} failed")
@@ -104,7 +104,7 @@ async def process_with_retry(operation_id: str, s3_key: str) -> tuple[str, list[
 
             await asyncio.sleep(RETRY_DELAY)
 
-async def process_pipeline(operation_id: str, s3_key: str) -> tuple[str, list[dict] | None]:
+async def process_pipeline(operation_id: str, s3_key: str) -> tuple[str, str | None]:
     await safe_update_status(operation_id, ProcessingStatus.processing)
 
     # STT
@@ -114,11 +114,15 @@ async def process_pipeline(operation_id: str, s3_key: str) -> tuple[str, list[di
         operation_id
     )
 
+    frames_key = None
+    if frames_meta:
+        frames_key = f"operations/{operation_id}/frames.jsonl"
+        save_frames_to_s3(frames_meta, key=frames_key)
     transcript_key = f"operations/{operation_id}/transcript.txt"
     write_file(transcript, transcript_key)
-    txt_file = save_to_txt(transcript, operation_id)
+    save_to_txt(transcript, operation_id)
 
-    return transcript_key, frames_meta
+    return transcript_key, frames_key
 
 def save_to_txt(text: str, operation_id: str) -> str:
     dir_path = f"/worker/tmp/{operation_id}"

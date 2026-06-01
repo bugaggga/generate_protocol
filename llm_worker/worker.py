@@ -8,9 +8,8 @@ from common.core.db_service import is_version_active, maybe_mark_cancelled
 from common.models.dto import TaskStatus
 from common.models.orm_models import LlmTask
 from common.services.queue import async_consume
-from common.services.s3_client import download_file, upload_protocol
+from common.services.s3_client import upload_protocol, load_frames_from_s3, get_file
 from llm_worker.llm.llm_service import build_protocol
-from llm_worker.llm.manage_protocol import read_file, save_protocol
 
 LLM_QUEUE="llm_tasks"
 SERVICE_NAME="[LLM Worker]"
@@ -36,10 +35,12 @@ async def process_llm(message: aio_pika.IncomingMessage):
     await message.ack()  # early ack
 
     try:
+        frames_meta = load_frames_from_s3(key=llm_task.frames_key)
+        transcript = get_file(llm_task.transcript_s3_key)
+        #transcript_path = f"/worker/tmp/{operation_id}/transcription.txt"
+        #download_file(llm_task.transcript_s3_key, transcript_path)
+        #transcript = read_file(transcript_path)
 
-        transcript_path = f"/worker/tmp/{operation_id}/transcription.txt"
-        download_file(llm_task.transcript_s3_key, transcript_path)
-        transcript = read_file(transcript_path)
 
         loop = asyncio.get_event_loop()  # берём loop до входа в поток
 
@@ -47,7 +48,7 @@ async def process_llm(message: aio_pika.IncomingMessage):
             build_protocol,
             transcript,
             llm_task.params,
-            llm_task.frames_meta,
+            frames_meta,
             str(operation_id),
             version_id,
             loop,

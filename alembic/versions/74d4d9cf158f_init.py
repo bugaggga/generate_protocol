@@ -9,7 +9,6 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy import JSON
 from sqlalchemy.sql import table, column
 import uuid
 from datetime import datetime, timezone
@@ -79,7 +78,7 @@ def upgrade() -> None:
 
         sa.Column('version_id', sa.UUID(), sa.ForeignKey('operation_versions.id'), nullable=False),
         sa.Column('transcript_s3_key', sa.String(), nullable=False),
-        sa.Column('frames_meta', sa.ARRAY(JSON), nullable=True),
+        sa.Column('frames_key', sa.String(), nullable=True),
         sa.Column('status', sa.Enum('pending', 'queued', 'processing', 'done', 'failed',
                                 name='task_status'), nullable=False),
         sa.Column('params', sa.JSON(), nullable=False),

@@ -1,6 +1,6 @@
 from sqlalchemy.orm import declarative_base, mapped_column, Mapped, relationship
 from sqlalchemy import (
-    DateTime, Enum, UUID, JSON, String, Integer, ARRAY, ForeignKey, Boolean, text, Index
+    DateTime, Enum, UUID, JSON, String, ForeignKey, Boolean, text, Index
 )
 
 from datetime import datetime, timezone
@@ -80,7 +80,7 @@ class LlmTask(BaseTask):
     __tablename__ = "llm_tasks"
 
     transcript_s3_key: Mapped[str] = mapped_column(String, nullable=False)
-    frames_meta: Mapped[list[dict]] = mapped_column(ARRAY(JSON), nullable=True)
+    frames_key: Mapped[str] = mapped_column(String, nullable=True)
 
     operation = relationship("Operation", back_populates="llm_tasks")
 

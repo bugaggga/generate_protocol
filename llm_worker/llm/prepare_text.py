@@ -116,7 +116,7 @@ def chunk_by_chars(
 
         chunk_frames = [
                            f for f in frames_meta
-                           if t_start <= f["timestamp_sec"] <= t_end
+                           if t_start <= float(f["timestamp_sec"]) <= t_end
                        ][:max_frames_per_chunk]
 
         logging.info(f"chunk_frames count: len{chunk_frames}; {SERVICE_NAME} Chunk text: {text_chunk}")
