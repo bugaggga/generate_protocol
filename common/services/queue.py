@@ -2,8 +2,10 @@ import json
 import os
 import logging
 import asyncio
+from typing import Optional
+
 import aio_pika
-from aio_pika.abc import AbstractIncomingMessage
+from aio_pika.abc import AbstractIncomingMessage, AbstractRobustConnection
 
 RABBIT_HOST = os.getenv("RABBIT_HOST", "rabbitmq")
 SERVICE_NAME="[Queue]"
@@ -51,7 +53,8 @@ async def async_consume(callback, queue_name, prefetch):
             await asyncio.sleep(5)
 
 async def get_channel() -> aio_pika.abc.AbstractChannel:
-    global _conn, _channel
+    _conn : Optional[AbstractRobustConnection, None] = None
+    _channel = None
     if _conn is None or _conn.is_closed:
         _conn = await aio_pika.connect_robust(RABBIT_HOST)   # авто-переподключение
         _channel = await _conn.channel()                       # publisher_confirms=True по умолчанию
@@ -61,9 +64,7 @@ async def get_channel() -> aio_pika.abc.AbstractChannel:
     return _channel
 
 async def publish(queue_name: str, message: dict):
-    connection = await aio_pika.connect_robust(RABBIT_HOST)
-    channel = await connection.channel()
-
+    channel = await get_channel()
     await channel.default_exchange.publish(
         aio_pika.Message(
             body=json.dumps(message).encode(),
