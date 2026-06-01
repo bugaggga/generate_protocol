@@ -106,6 +106,12 @@ export function ProtocolPanel({ operationId }) {
         </button>
       </div>
 
+      <style>{`
+        .protocol-content table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+        .protocol-content th,
+        .protocol-content td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; }
+        .protocol-content thead th { background: #f5f5f5; font-weight: 600; }
+      `}</style>
       <div
         ref={contentRef}
         className="protocol-content"
