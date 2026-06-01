@@ -37,6 +37,8 @@ class RecognizeService:
             compute_type=compute_type
         )
 
+        logging.info(f"[Recognize] CUDA devices: {ctranslate2.get_cuda_device_count()}, "
+                     f"using device={device}, model={model_name}, compute_type={compute_type}")
         logging.info(f"{SERVICE_NAME} STT Model loaded")
 
     def download_file(self, key: str, operation_id: str) -> str:
