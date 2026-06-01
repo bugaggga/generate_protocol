@@ -1,6 +1,5 @@
 import React, { useRef } from "react";
 import { useProtocol } from "../hooks/useProtocol";
-import { protocol-content } from "./ui/styles.css";
 
 /**
  * ProtocolPanel
