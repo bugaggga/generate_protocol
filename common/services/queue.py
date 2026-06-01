@@ -10,18 +10,15 @@ from aio_pika.abc import AbstractIncomingMessage, AbstractRobustConnection
 RABBIT_HOST = os.getenv("RABBIT_HOST", "rabbitmq")
 SERVICE_NAME="[Queue]"
 
-semaphore = asyncio.Semaphore(1)
-
 
 async def async_consume(callback, queue_name, prefetch):
     prefetch = int(prefetch)
     semaphore = asyncio.Semaphore(prefetch)  # создаём на работающем loop, согласуем с prefetch
     tasks: set[asyncio.Task] = set()
-    #prefetch = int(prefetch)
     """Асинхронное потребление сообщений из очереди RabbitMQ с контролем параллелизма"""
     while True:  # reconnect loop
         try:
-            connection = await aio_pika.connect_robust(RABBIT_HOST, heartbeat=1200)
+            connection = await aio_pika.connect_robust(RABBIT_HOST, heartbeat=60)
             async with connection:
                 channel = await connection.channel()
                 await channel.set_qos(prefetch_count=prefetch)

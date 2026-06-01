@@ -1,9 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.infrastructure.outbox import outbox_loop
 import logging
-from contextlib import asynccontextmanager
-import asyncio
 
 from app.api.routes import router
 

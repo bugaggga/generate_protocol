@@ -3,12 +3,10 @@ import aio_pika
 import asyncio
 import logging
 
-from sqlalchemy.orm import joinedload
-
 from common.core.db import AsyncSessionLocal
 from common.core.db_service import is_version_active, maybe_mark_cancelled
 from common.models.dto import TaskStatus
-from common.models.orm_models import LlmTask
+from common.models.orm_models import LlmTask, OperationVersion
 from common.services.queue import async_consume
 from common.services.s3_client import upload_protocol, load_frames_from_s3, get_file
 from llm_worker.llm.llm_service import build_protocol
@@ -87,12 +85,13 @@ async def process_llm(message: aio_pika.IncomingMessage):
 async def get_task(task_id) ->  tuple[LlmTask | None, dict | None]:
     async with AsyncSessionLocal() as db:
         # Получение задачи на генерацию
-        task = await db.get(LlmTask, task_id, options=[joinedload(LlmTask.version)])
+        task = await db.get(LlmTask, task_id)
         if not task or task.status != TaskStatus.queued:
             return None, None
 
         task.status = TaskStatus.processing
-        form_params = task.version.params
+        version = await db.get(OperationVersion, task.version_id)
+        form_params = version.params
         await db.commit()
         return task, form_params
 

@@ -7,6 +7,8 @@ from common.models.orm_models import BaseTask
 from common.services.queue import publish
 from common.models.dto import TaskStatus
 
+from sqlalchemy.exc import OperationalError, InterfaceError, DBAPIError
+
 POLL_INTERVAL = 1  # сек
 SERVICE_NAME = "[OutBox]"
 
@@ -17,13 +19,22 @@ OUTBOX_CONFIG = [
 ]
 
 async def outbox_loop():
+    backoff = 1
     while True:
         try:
             for model, queue_name, id_field in OUTBOX_CONFIG:
                 await outbox_table(model, queue_name, id_field)
+            backoff = 1  # сброс после успешной итерации
+            await asyncio.sleep(POLL_INTERVAL)
+        except asyncio.CancelledError:
+            raise
+        except (OperationalError, InterfaceError, DBAPIError, OSError) as e:
+            logging.warning(f"[OutBox] инфраструктура недоступна ({e.__class__.__name__}), повтор через {backoff}с")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30)  # 1→2→4…→30с, не чаще
         except Exception:
-            logging.exception(f"{SERVICE_NAME} iteration failed")
-        await asyncio.sleep(POLL_INTERVAL)
+            logging.exception("[OutBox] неожиданная ошибка")  # только настоящие баги с трейсбеком
+            await asyncio.sleep(POLL_INTERVAL)
 
 async def outbox_table(table_model: BaseTask, queue_name: str, id_field: str, batch: int = 50):
     """
