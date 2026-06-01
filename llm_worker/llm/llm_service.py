@@ -38,7 +38,8 @@ def call_llm(prompt: str, images: list[str] | None = None):
         "stream": False,
         "options": {
             "num_ctx": 4096
-        }
+        },
+        "temperature": 0.1
     }
     if images:
         payload["images"] = images

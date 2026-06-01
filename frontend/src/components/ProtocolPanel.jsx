@@ -1,5 +1,6 @@
 import React, { useRef } from "react";
 import { useProtocol } from "../hooks/useProtocol";
+import { protocol-content } from "./ui/styles.css";
 
 /**
  * ProtocolPanel
@@ -107,6 +108,7 @@ export function ProtocolPanel({ operationId }) {
 
       <div
         ref={contentRef}
+        className="protocol-content"
         style={{
           background: "#fff", color: "#000",
           padding: 24, borderRadius: 8,
