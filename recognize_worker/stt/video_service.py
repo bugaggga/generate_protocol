@@ -107,11 +107,6 @@ def extract_frames(video_path: str, output_dir: str) -> list[tuple[str, float]]:
 
     cap.release()
 
-    # Если набрали больше MAX_FRAMES — прореживаем равномерно
-    #if len(selected) > MAX_FRAMES:
-    #    indices = np.linspace(0, len(selected) - 1, MAX_FRAMES, dtype=int)
-    #    selected = [selected[i] for i in indices]'''
-
     # Сохранение и масштабирование
     frames_with_ts = []
     for i, (frame_idx, timestamp, frame) in enumerate(selected):

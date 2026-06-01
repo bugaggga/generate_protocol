@@ -44,6 +44,9 @@ services:
     command: python -m app.infrastructure.worker
     env_file:
       - .env
+    volumes:
+      - ./app:/app/app
+      - ./common:/app/common
     depends_on:
       - api
     restart: unless-stopped

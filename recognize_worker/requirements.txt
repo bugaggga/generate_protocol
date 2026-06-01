@@ -5,7 +5,6 @@ pydantic
 boto3
 pika
 torch
-openai-whisper
 faster-whisper
 requests
 opencv-python-headless

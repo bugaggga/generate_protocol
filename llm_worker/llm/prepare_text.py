@@ -1,5 +1,6 @@
 import logging
 import re
+import numpy as np
 
 SERVICE_NAME="[Merge]"
 
@@ -33,6 +34,25 @@ def parse_timed_transcript(transcript: str) -> list[tuple[float, float, str]]:
         if text:
             segments.append((start, end, text))
     return segments
+
+def _frames_lin(chunk_frames_all : list[dict],
+                max_frames_per_chunk : int,
+                t_start : float,
+                t_end : float):
+    if len(chunk_frames_all) <= max_frames_per_chunk:
+        chunk_frames = chunk_frames_all
+    else:
+        # равномерные точки по времени внутри чанка
+        time_points = np.linspace(t_start, t_end, max_frames_per_chunk)
+
+        chunk_frames = []
+        for t in time_points:
+            # ближайший кадр к каждой временной точке
+            closest = min(chunk_frames_all, key=lambda f: abs(float(f["timestamp_sec"]) - t))
+            if closest not in chunk_frames:
+                chunk_frames.append(closest)
+
+        return chunk_frames
 
 def _split_segments_by_chars(
         segments: list[tuple[float, float, str]],
@@ -114,10 +134,12 @@ def chunk_by_chars(
         lines = [f"{t}" for _, _, t in seg_chunk]
         text_chunk = "\n".join(lines)
 
-        chunk_frames = [
+        chunk_frames_all = [
                            f for f in frames_meta
                            if t_start <= float(f["timestamp_sec"]) <= t_end
-                       ][:max_frames_per_chunk]
+                       ]
+
+        chunk_frames = _frames_lin(chunk_frames_all, max_frames_per_chunk, t_start, t_end)
 
         logging.info(f"chunk_frames count: len{chunk_frames}; {SERVICE_NAME} Chunk text: {text_chunk}")
         result.append((text_chunk, chunk_frames))
