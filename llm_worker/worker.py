@@ -3,6 +3,8 @@ import aio_pika
 import asyncio
 import logging
 
+from sqlalchemy.orm import joinedload
+
 from common.core.db import AsyncSessionLocal
 from common.core.db_service import is_version_active, maybe_mark_cancelled
 from common.models.dto import TaskStatus
@@ -20,9 +22,10 @@ async def process_llm(message: aio_pika.IncomingMessage):
     body = json.loads(message.body)
     llm_task_id = body["id"]
 
-    llm_task = await get_task(llm_task_id,
-                              message)
-    if not llm_task: return
+    llm_task, form_params = await get_task(llm_task_id)
+    if not llm_task:
+        await message.ack()
+        return
     operation_id = llm_task.operation_id
     version_id = llm_task.version_id
 
@@ -47,7 +50,7 @@ async def process_llm(message: aio_pika.IncomingMessage):
         json_protocol, md_protocol = await asyncio.to_thread(
             build_protocol,
             transcript,
-            llm_task.params,
+            form_params,
             frames_meta,
             str(operation_id),
             version_id,
@@ -81,17 +84,17 @@ async def process_llm(message: aio_pika.IncomingMessage):
             task.status = TaskStatus.failed
             await db.commit()
 
-async def get_task(task_id, message: aio_pika.IncomingMessage) ->  LlmTask | None:
+async def get_task(task_id) ->  tuple[LlmTask | None, dict | None]:
     async with AsyncSessionLocal() as db:
         # Получение задачи на генерацию
-        task = await db.get(LlmTask, task_id)
+        task = await db.get(LlmTask, task_id, options=[joinedload(LlmTask.version)])
         if not task or task.status != TaskStatus.queued:
-            await message.ack()
-            return
-        task.status = TaskStatus.processing
+            return None, None
 
+        task.status = TaskStatus.processing
+        form_params = task.version.params
         await db.commit()
-        return task
+        return task, form_params
 
 async def main():
     logging.info(f"{SERVICE_NAME} Starting...")

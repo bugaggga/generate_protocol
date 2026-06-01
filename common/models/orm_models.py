@@ -55,8 +55,6 @@ class BaseTask(Base):
     status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus, name='task_status'),
                                                nullable=False)
 
-    params: Mapped[dict] = mapped_column(JSON, nullable=False)
-
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -74,6 +72,7 @@ class RecognizeTask(BaseTask):
     file_s3_key: Mapped[str] = mapped_column(String, nullable=False)
 
     operation = relationship("Operation", back_populates="recognize_tasks")
+    version = relationship("OperationVersion", back_populates="rec_task")
 
 
 class LlmTask(BaseTask):
@@ -83,6 +82,7 @@ class LlmTask(BaseTask):
     frames_key: Mapped[str] = mapped_column(String, nullable=True)
 
     operation = relationship("Operation", back_populates="llm_tasks")
+    version = relationship("OperationVersion", back_populates="llm_task")
 
 class OperationVersion(Base):
     __tablename__ = "operation_versions"
@@ -90,11 +90,16 @@ class OperationVersion(Base):
     id = mapped_column(UUID, primary_key=True, default=uuid.uuid4, index=False)
     operation_id = mapped_column(UUID, ForeignKey("operations.id"), nullable=False, index=True)
     is_active = mapped_column(Boolean, nullable=False, default=True)
+
+    params: Mapped[dict] = mapped_column(JSON, nullable=False)
+
     created_at = mapped_column(DateTime(timezone=True), nullable=False,
                                default=lambda: datetime.now(timezone.utc))
     deactivated_at = mapped_column(DateTime(timezone=True), nullable=True)
 
     operation = relationship("Operation", back_populates="operation_versions")
+    llm_task = relationship("LlmTask", back_populates="version")
+    rec_task = relationship("RecognizeTask", back_populates="version")
 
     __table_args__ = (
         Index(

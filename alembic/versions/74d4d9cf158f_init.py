@@ -40,6 +40,8 @@ def upgrade() -> None:
                     sa.Column('operation_id', sa.UUID(), sa.ForeignKey('operations.id'), nullable=False),
 
                     sa.Column('is_active', sa.Boolean(), nullable=False),
+                    sa.Column('params', sa.JSON(), nullable=False),
+
                     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
                     sa.Column('deactivated_at', sa.DateTime(timezone=True), nullable=True),
 
@@ -58,7 +60,6 @@ def upgrade() -> None:
         sa.Column('file_s3_key', sa.String(), nullable=False),
         sa.Column('status', sa.Enum('pending', 'queued', 'processing', 'done', 'failed',
                                 name='task_status'), nullable=False),
-        sa.Column('params', sa.JSON(), nullable=False),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
 
@@ -81,7 +82,6 @@ def upgrade() -> None:
         sa.Column('frames_key', sa.String(), nullable=True),
         sa.Column('status', sa.Enum('pending', 'queued', 'processing', 'done', 'failed',
                                 name='task_status'), nullable=False),
-        sa.Column('params', sa.JSON(), nullable=False),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
 

@@ -27,9 +27,10 @@ async def process_stt(message: aio_pika.IncomingMessage):
     body = json.loads(message.body)
     rec_task_id = body["id"]  # ← только id
 
-    rec_task = await get_task(rec_task_id,
-                              message)
-    if not rec_task: return
+    rec_task = await get_task(rec_task_id)
+    if not rec_task:
+        await message.ack()
+        return
     operation_id = rec_task.operation_id
     version_id = rec_task.version_id
 
@@ -61,7 +62,6 @@ async def process_stt(message: aio_pika.IncomingMessage):
                 version_id=version_id,
                 transcript_s3_key=transcript_key,
                 frames_key=frames_key,
-                params=rec_task.params,
                 status=TaskStatus.pending
             )
             db.add(llm_task)
@@ -75,12 +75,11 @@ async def process_stt(message: aio_pika.IncomingMessage):
             task.status = TaskStatus.failed
             await db.commit()
 
-async def get_task(task_id, message: aio_pika.IncomingMessage) -> RecognizeTask | None:
+async def get_task(task_id) -> RecognizeTask | None:
     async with AsyncSessionLocal() as db:
         # Получение задачи на генерацию
         task = await db.get(RecognizeTask, task_id)
         if not task or task.status != TaskStatus.queued:
-            await message.ack()
             return
         task.status = TaskStatus.processing
 

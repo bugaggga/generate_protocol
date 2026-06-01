@@ -82,6 +82,7 @@ async def upload_audio(operation_id: UUID,
     new_version = OperationVersion(
         operation_id=operation_id,
         is_active=True,
+        params=params.form.model_dump()
     )
     db.add(new_version)
     await db.flush()
@@ -100,7 +101,6 @@ async def upload_audio(operation_id: UUID,
         operation_id=operation_id,
         version_id=new_version.id,
         file_s3_key=params.s3_key,
-        params=params.form.model_dump(),
         status=TaskStatus.pending,
     )
     db.add(recognize_task)
