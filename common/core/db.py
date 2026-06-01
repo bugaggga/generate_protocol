@@ -6,7 +6,10 @@ DATABASE_URL = os.getenv(
     "postgresql+asyncpg://user:password@postgres:5432/stt_db"
 )
 
-engine = create_async_engine(DATABASE_URL, echo=False)
+engine = create_async_engine(DATABASE_URL,
+                             echo=False,
+                             pool_pre_ping=True,  # проверка живости соединения перед выдачей из пула
+                             pool_recycle=300)
 
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
