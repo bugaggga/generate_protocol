@@ -181,18 +181,6 @@ export function FormPanel({ operationId }) {
             </span>
           )}
         </span>
-        <button
-          onClick={() => send(operationId)}
-          disabled={submitting || submitStatus === "ok"}
-          style={{
-            padding: "9px 20px", borderRadius: 8, border: "none", whiteSpace: "nowrap",
-            cursor: submitting || submitStatus === "ok" ? "not-allowed" : "pointer",
-            background: submitBg,
-            color: submitting ? "var(--color-text-tertiary)" : "#fff",
-            fontWeight: 600, fontSize: 13, transition: "all 0.15s",
-          }}>
-          {submitLabel}
-        </button>
       </div>
     </div>
   );

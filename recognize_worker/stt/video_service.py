@@ -51,6 +51,20 @@ def extract_audio(video_path: Path, output_path: Path) -> str:
     )
     return str(output_path)
 
+
+def resize_for_vl_model(frame, patch_size=28, max_width=448):
+    h, w = frame.shape[:2]
+
+    # масштабируем по ширине
+    scale = max_width / w
+    new_w = max_width
+    new_h = int(h * scale)
+
+    # округляем высоту до кратного patch_size
+    new_h = (new_h // patch_size) * patch_size
+
+    return cv2.resize(frame, (new_w, new_h))
+
 def extract_frames(video_path: str, output_dir: str) -> list[tuple[str, float]]:
     """
         Извлекает ключевые кадры из видео.
@@ -112,12 +126,7 @@ def extract_frames(video_path: str, output_dir: str) -> list[tuple[str, float]]:
     for i, (frame_idx, timestamp, frame) in enumerate(selected):
         fname = f"frame_{i + 1:04d}.jpg"
         fpath = os.path.join(output_dir, fname)
-
-        # масштабируем до 1280px по ширине
-        h, w = frame.shape[:2]
-        if w > 1280:
-            scale = 1280 / w
-            frame = cv2.resize(frame, (1280, int(h * scale)))
+        frame = resize_for_vl_model(frame)
 
         cv2.imwrite(fpath, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         frames_with_ts.append((fpath, timestamp))
